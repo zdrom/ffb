@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Yahoo Draft Companion",
+  "version": "1.0.0",
+  "description": "Sync Yahoo Fantasy Football draft picks with Draft Copilot in real-time",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://football.fantasysports.yahoo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://football.fantasysports.yahoo.com/*/draftresults*",
+        "https://football.fantasysports.yahoo.com/draftclient/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Yahoo Draft Companion"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
