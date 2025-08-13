@@ -1,12 +1,22 @@
-import React, { useMemo } from 'react';
-import { BarChart3, Crown, Target } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { BarChart3, Crown, Target, Brain, AlertCircle, Key, Save, X } from 'lucide-react';
 import { useDraft } from '../../contexts/DraftContext';
 import { DynamicVORPEngine } from '../../utils/dynamicVORP';
 import { VORPOnlyRecommendationsEngine } from '../../utils/vorpOnlyRecommendations';
+import { AIRecommendationService, createAIRecommendationService } from '../../services/aiRecommendationService';
+import { DraftContextAnalyzer } from '../../utils/draftContextAnalyzer';
 import type { Position } from '../../types';
+import type { AIRecommendation } from '../../services/aiRecommendationService';
 
 const PositionalValueComparison: React.FC = () => {
   const { state } = useDraft();
+
+  const [aiRecommendation, setAIRecommendation] = useState<AIRecommendation | null>(null);
+  const [isLoadingAI, setIsLoadingAI] = useState(false);
+  const [aiEnabled, setAIEnabled] = useState(false);
+  const [showAIMode, setShowAIMode] = useState(true);
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
 
   const { vorpByPosition, starterSatisfaction, topRecommendation, vorpEngine, userTeam } = useMemo(() => {
     const userTeam = state.teams.find(t => t.isUser);
@@ -90,6 +100,73 @@ const PositionalValueComparison: React.FC = () => {
 
   const positions: Position[] = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
 
+  // Initialize API key from localStorage
+  useEffect(() => {
+    const savedApiKey = localStorage.getItem('openai_api_key');
+    if (savedApiKey) {
+      setApiKeyInput(savedApiKey);
+      setAIEnabled(true);
+    }
+  }, []);
+
+  // Handle API key save
+  const handleSaveApiKey = () => {
+    if (apiKeyInput.trim()) {
+      localStorage.setItem('openai_api_key', apiKeyInput.trim());
+      setAIEnabled(true);
+      setShowApiKeyInput(false);
+    }
+  };
+
+  // Handle API key removal
+  const handleRemoveApiKey = () => {
+    localStorage.removeItem('openai_api_key');
+    setApiKeyInput('');
+    setAIEnabled(false);
+    setAIRecommendation(null);
+    setShowApiKeyInput(false);
+  };
+
+  // AI Recommendation Effect
+  useEffect(() => {
+    const getAIRecommendation = async () => {
+      // Check for API key (you can set this in environment or user settings)
+      const apiKey = process.env.REACT_APP_OPENAI_API_KEY || localStorage.getItem('openai_api_key');
+      
+      if (!apiKey || !userTeam || state.players.length === 0) {
+        setAIEnabled(false);
+        return;
+      }
+
+      setAIEnabled(true);
+      setIsLoadingAI(true);
+
+      try {
+        const aiService = createAIRecommendationService(apiKey);
+        if (!aiService) return;
+
+        const contextAnalyzer = new DraftContextAnalyzer(
+          state.players,
+          state.teams,
+          state.settings,
+          state.picks
+        );
+
+        const context = contextAnalyzer.buildAIContext(state.currentPick);
+        const recommendation = await aiService.getRecommendation(context);
+        
+        setAIRecommendation(recommendation);
+      } catch (error) {
+        console.error('AI recommendation failed:', error);
+        setAIRecommendation(null);
+      } finally {
+        setIsLoadingAI(false);
+      }
+    };
+
+    getAIRecommendation();
+  }, [state.players, state.teams, state.settings, state.picks, state.currentPick, userTeam]);
+
   if (!userTeam) {
     return <div>Loading...</div>;
   }
@@ -107,12 +184,114 @@ const PositionalValueComparison: React.FC = () => {
       </div>
 
       <div className="p-6">
-        {/* Top VORP Recommendation */}
-        {topRecommendation && (
+        {/* AI vs VORP Toggle */}
+        {aiEnabled && (
+          <div className="mb-4 flex items-center justify-center">
+            <div className="flex bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setShowAIMode(true)}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  showAIMode ? 'bg-purple-600 text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <Brain className="h-4 w-4 inline mr-1" />
+                AI Recommendation
+              </button>
+              <button
+                onClick={() => setShowAIMode(false)}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  !showAIMode ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <Target className="h-4 w-4 inline mr-1" />
+                VORP Only
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* AI Recommendation */}
+        {aiEnabled && showAIMode && aiRecommendation && !isLoadingAI && (
+          <div className="mb-6 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center">
+                <Brain className="h-5 w-5 text-purple-600 mr-2" />
+                <h3 className="text-lg font-semibold text-purple-900">AI Strategic Recommendation</h3>
+              </div>
+              <div className="flex items-center">
+                <span className="text-xs text-purple-600 bg-purple-100 px-2 py-1 rounded-full">
+                  {aiRecommendation.confidence}% Confidence
+                </span>
+                <span className={`ml-2 text-xs px-2 py-1 rounded-full ${
+                  aiRecommendation.urgency === 'Critical' ? 'bg-red-100 text-red-600' :
+                  aiRecommendation.urgency === 'High' ? 'bg-orange-100 text-orange-600' :
+                  aiRecommendation.urgency === 'Medium' ? 'bg-yellow-100 text-yellow-600' :
+                  'bg-green-100 text-green-600'
+                }`}>
+                  {aiRecommendation.urgency} Urgency
+                </span>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2">
+                <div className="mb-3">
+                  <div className="font-bold text-xl text-gray-900">{aiRecommendation.recommendedPlayer.name}</div>
+                  <div className="text-sm text-gray-600">{aiRecommendation.recommendedPlayer.team} - {aiRecommendation.recommendedPlayer.position}</div>
+                  <div className="text-lg font-bold text-purple-600 mt-1">
+                    VORP: {vorpEngine ? vorpEngine.calculateDynamicVORP(aiRecommendation.recommendedPlayer).toFixed(1) : 'N/A'}
+                  </div>
+                </div>
+                
+                <div className="text-sm text-gray-700 mb-3">
+                  <strong>AI Analysis:</strong> {aiRecommendation.reasoning}
+                </div>
+                
+                {aiRecommendation.strategicNote && (
+                  <div className="text-sm text-purple-700 bg-purple-50 p-2 rounded">
+                    <strong>Strategy:</strong> {aiRecommendation.strategicNote}
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                {aiRecommendation.alternativeOptions.length > 0 && (
+                  <div>
+                    <h4 className="font-medium text-gray-900 mb-2">Alternatives:</h4>
+                    <div className="space-y-2">
+                      {aiRecommendation.alternativeOptions.slice(0, 2).map((alt, index) => (
+                        <div key={index} className="text-sm">
+                          <div className="font-medium text-gray-800">{alt.player.name}</div>
+                          <div className="text-gray-600">{alt.reason}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Loading AI */}
+        {aiEnabled && isLoadingAI && (
+          <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+            <div className="flex items-center">
+              <Brain className="h-5 w-5 text-purple-600 mr-2 animate-pulse" />
+              <h3 className="text-lg font-semibold text-purple-900">AI Analyzing Draft Context...</h3>
+            </div>
+            <div className="mt-2 text-sm text-purple-700">
+              Considering team rosters, player availability, and positional scarcity...
+            </div>
+          </div>
+        )}
+
+        {/* VORP-Only Recommendation */}
+        {(!aiEnabled || !showAIMode) && topRecommendation && (
           <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex items-center mb-2">
               <Target className="h-5 w-5 text-blue-600 mr-2" />
-              <h3 className="text-lg font-semibold text-blue-900">Recommended Pick</h3>
+              <h3 className="text-lg font-semibold text-blue-900">VORP Recommendation</h3>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center">
@@ -126,6 +305,103 @@ const PositionalValueComparison: React.FC = () => {
                   </div>
                   <div className="text-sm text-gray-600">{topRecommendation.reasons?.join(', ') || 'Top VORP value'}</div>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* API Key Setup Section */}
+        {!aiEnabled && !showApiKeyInput && (
+          <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Brain className="h-5 w-5 text-yellow-600 mr-3" />
+                <div>
+                  <div className="font-medium text-yellow-800">Enable AI-Powered Recommendations</div>
+                  <div className="text-sm text-yellow-700">Get strategic draft advice that considers team rosters, player availability, and VORP analysis</div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowApiKeyInput(true)}
+                className="flex items-center px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+              >
+                <Key className="h-4 w-4 mr-2" />
+                Setup AI
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* API Key Input Form */}
+        {showApiKeyInput && (
+          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center mb-3">
+              <Key className="h-5 w-5 text-blue-600 mr-2" />
+              <h3 className="font-medium text-blue-900">Configure OpenAI API Key</h3>
+            </div>
+            
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  OpenAI API Key
+                </label>
+                <input
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="sk-..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <div className="text-xs text-gray-600 mt-1">
+                  Your API key is stored locally in your browser and never shared. Get one at{' '}
+                  <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    platform.openai.com
+                  </a>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveApiKey}
+                  disabled={!apiKeyInput.trim()}
+                  className="flex items-center px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Save className="h-4 w-4 mr-2" />
+                  Save & Enable AI
+                </button>
+                <button
+                  onClick={() => setShowApiKeyInput(false)}
+                  className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  <X className="h-4 w-4 mr-1" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Configuration (when enabled) */}
+        {aiEnabled && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center text-sm text-green-800">
+                <Brain className="h-4 w-4 mr-2" />
+                <span>AI recommendations enabled</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowApiKeyInput(true)}
+                  className="text-xs text-green-600 hover:text-green-800 transition-colors"
+                >
+                  Change Key
+                </button>
+                <button
+                  onClick={handleRemoveApiKey}
+                  className="text-xs text-red-600 hover:text-red-800 transition-colors"
+                >
+                  Disable AI
+                </button>
               </div>
             </div>
           </div>
