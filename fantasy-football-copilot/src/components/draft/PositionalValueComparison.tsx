@@ -130,8 +130,8 @@ const PositionalValueComparison: React.FC = () => {
   // AI Recommendation Effect
   useEffect(() => {
     const getAIRecommendation = async () => {
-      // Check for API key (you can set this in environment or user settings)
-      const apiKey = process.env.REACT_APP_OPENAI_API_KEY || localStorage.getItem('openai_api_key');
+      // Check for API key from localStorage only
+      const apiKey = localStorage.getItem('openai_api_key');
       
       if (!apiKey || !userTeam || state.players.length === 0) {
         setAIEnabled(false);

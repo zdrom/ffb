@@ -94,20 +94,22 @@ export class AIRecommendationService {
 5. Account for bye week conflicts and injury risks
 6. Provide clear, actionable reasoning
 
+CRITICAL RULE: You MUST only recommend players from the "AVAILABLE PLAYERS" list provided. Do NOT recommend any player who is not explicitly listed as available.
+
 Always respond in this JSON format:
 {
-  "recommendedPlayer": "Player Name",
+  "recommendedPlayer": "Exact Player Name From Available List",
   "confidence": 85,
   "reasoning": "Clear explanation favoring VORP with context",
   "alternativeOptions": [
-    {"player": "Alt Player 1", "reason": "Why this could work"},
-    {"player": "Alt Player 2", "reason": "Contrarian pick explanation"}
+    {"player": "Alt Player 1 From Available List", "reason": "Why this could work"},
+    {"player": "Alt Player 2 From Available List", "reason": "Contrarian pick explanation"}
   ],
   "strategicNote": "Broader strategy insight",
   "urgency": "High"
 }
 
-Be decisive but explain trade-offs. Favor proven production and VORP over hype.`;
+Use EXACT player names from the available players list. Be decisive but explain trade-offs. Favor proven production and VORP over hype.`;
   }
 
   private buildPrompt(context: AIRecommendationContext): string {
@@ -145,7 +147,8 @@ ${Object.entries(settings.rosterSlots).map(([pos, count]) =>
   `${pos}: ${count} required (${userTeam.roster[pos as Position]?.length || 0} drafted)`
 ).join('\n')}
 
-TOP 15 AVAILABLE PLAYERS BY VORP:
+*** IMPORTANT: ONLY RECOMMEND FROM THE FOLLOWING AVAILABLE PLAYERS ***
+TOP 15 AVAILABLE (UNDRAFTED) PLAYERS BY VORP:
 ${topPlayers}
 
 POSITION SCARCITY ANALYSIS:
@@ -203,23 +206,59 @@ Please analyze this situation and recommend the optimal pick. Remember:
       
       const parsed = JSON.parse(jsonMatch[0]);
       
-      // Find the recommended player
-      const recommendedPlayer = context.availablePlayers.find(p => 
-        p.name.toLowerCase().includes(parsed.recommendedPlayer.toLowerCase()) ||
-        parsed.recommendedPlayer.toLowerCase().includes(p.name.toLowerCase())
-      );
+      // Debug logging
+      console.log('AI Response parsed:', parsed);
+      console.log('Available players count:', context.availablePlayers.length);
+      console.log('Looking for player:', parsed.recommendedPlayer);
+      
+      // Find the recommended player with more flexible matching
+      const recommendedPlayer = context.availablePlayers.find(p => {
+        const playerNameLower = p.name.toLowerCase().trim();
+        const recommendedNameLower = parsed.recommendedPlayer.toLowerCase().trim();
+        
+        // Try exact match first
+        if (playerNameLower === recommendedNameLower) return true;
+        
+        // Try partial matches
+        if (playerNameLower.includes(recommendedNameLower) || 
+            recommendedNameLower.includes(playerNameLower)) return true;
+        
+        // Try last name only match (in case AI uses just last name)
+        const playerLastName = playerNameLower.split(' ').pop() || '';
+        const recommendedLastName = recommendedNameLower.split(' ').pop() || '';
+        if (playerLastName && recommendedLastName && 
+            playerLastName === recommendedLastName && 
+            playerLastName.length > 3) return true;
+        
+        return false;
+      });
+
+      console.log('Found recommended player:', recommendedPlayer?.name);
 
       if (!recommendedPlayer) {
-        throw new Error('Recommended player not found in available players');
+        console.error('Available players:', context.availablePlayers.map(p => p.name).slice(0, 10));
+        throw new Error(`Recommended player "${parsed.recommendedPlayer}" not found in available players`);
       }
 
-      // Find alternative players
+      // Verify the player is actually available (double-check)
+      if (recommendedPlayer.isDrafted) {
+        console.error('AI recommended a drafted player:', recommendedPlayer.name);
+        throw new Error(`Recommended player ${recommendedPlayer.name} is already drafted`);
+      }
+
+      // Find alternative players with same improved matching
       const alternativeOptions = parsed.alternativeOptions?.map((alt: any) => {
-        const altPlayer = context.availablePlayers.find(p => 
-          p.name.toLowerCase().includes(alt.player.toLowerCase()) ||
-          alt.player.toLowerCase().includes(p.name.toLowerCase())
-        );
-        return altPlayer ? { player: altPlayer, reason: alt.reason } : null;
+        const altPlayer = context.availablePlayers.find(p => {
+          const playerNameLower = p.name.toLowerCase().trim();
+          const altNameLower = alt.player.toLowerCase().trim();
+          
+          return playerNameLower === altNameLower ||
+                 playerNameLower.includes(altNameLower) || 
+                 altNameLower.includes(playerNameLower) ||
+                 (playerNameLower.split(' ').pop() === altNameLower.split(' ').pop() && 
+                  altNameLower.split(' ').pop()!.length > 3);
+        });
+        return altPlayer && !altPlayer.isDrafted ? { player: altPlayer, reason: alt.reason } : null;
       }).filter(Boolean) || [];
 
       return {

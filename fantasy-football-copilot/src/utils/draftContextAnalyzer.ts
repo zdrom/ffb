@@ -43,7 +43,11 @@ export class DraftContextAnalyzer {
   }
 
   private getAvailablePlayers(): Player[] {
-    return this.players.filter(p => !p.isDrafted && !p.isDoNotDraft);
+    const available = this.players.filter(p => !p.isDrafted && !p.isDoNotDraft);
+    console.log('Draft Context Analyzer - Available players:', available.length);
+    console.log('Draft Context Analyzer - Total players:', this.players.length);
+    console.log('Draft Context Analyzer - Drafted players:', this.players.filter(p => p.isDrafted).length);
+    return available;
   }
 
   private getTopVORPPlayers(availablePlayers: Player[], limit: number) {
