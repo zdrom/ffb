@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, type ReactNode } from 'react';
-import type { DraftState, DraftPick, Player, Team, DraftSettings } from '../types';
+import type { DraftState, DraftPick, Player, Team, DraftSettings, Position } from '../types';
 import { autoSaveDraft } from '../utils/draftPersistence';
 
 type DraftAction =
@@ -7,6 +7,7 @@ type DraftAction =
   | { type: 'LOAD_PLAYERS'; payload: Player[] }
   | { type: 'MAKE_PICK'; payload: { playerId: string; teamId: string } }
   | { type: 'AUTO_MAKE_PICK'; payload: { playerName: string; teamName: string; pickNumber: number } }
+  | { type: 'BATCH_SYNC_PICKS'; payload: { picks: { playerName: string; teamName: string; pickNumber: number }[] } }
   | { type: 'TOGGLE_TARGET'; payload: string }
   | { type: 'TOGGLE_DO_NOT_DRAFT'; payload: string }
   | { type: 'UPDATE_PLAYER_RANKINGS'; payload: Player[] }
@@ -186,6 +187,9 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
     case 'AUTO_UPDATE_TEAMS':
       return handleAutoUpdateTeams(state, action.payload);
 
+    case 'BATCH_SYNC_PICKS':
+      return handleBatchSyncPicks(state, action.payload);
+
     default:
       return state;
   }
@@ -302,6 +306,181 @@ function handleAutoUpdateTeams(state: DraftState, payload: { teamName: string; p
     ...state,
     teams: updatedTeams
   };
+}
+
+// Handler for batch syncing multiple picks efficiently
+function handleBatchSyncPicks(state: DraftState, payload: { picks: { playerName: string; teamName: string; pickNumber: number }[] }): DraftState {
+  try {
+    let newState = { ...state };
+    
+    // Optimize for large datasets
+    const picks = payload.picks;
+    const picksCount = picks.length;
+    
+    console.log(`Processing batch of ${picksCount} picks`);
+    
+    // Pre-allocate collections with estimated capacity
+    const allPicks: DraftPick[] = [];
+    allPicks.length = 0; // Ensure clean start
+    
+    const updatedPlayerIds = new Set<string>();
+    const teamRosterUpdates = new Map<string, Record<Position, Player[]>>();
+    
+    // Create player lookup map for faster searches
+    const playerLookup = new Map<string, Player>();
+    newState.players.forEach(player => {
+      const normalizedName = player.name.toLowerCase().trim();
+      playerLookup.set(normalizedName, player);
+      // Also add variations for better matching
+      const cleanName = normalizedName.replace(/[.']/g, '').replace(/\s+jr\.?$/, '').replace(/\s+sr\.?$/, '').replace(/\s+iii?$/, '').trim();
+      if (cleanName !== normalizedName) {
+        playerLookup.set(cleanName, player);
+      }
+    });
+    
+    // Initialize team rosters map efficiently
+    newState.teams.forEach(team => {
+      teamRosterUpdates.set(team.id, {
+        QB: [...team.roster.QB],
+        RB: [...team.roster.RB],
+        WR: [...team.roster.WR],
+        TE: [...team.roster.TE],
+        K: [...team.roster.K],
+        DEF: [...team.roster.DEF]
+      });
+    });
+    
+    // Sort picks by pick number to ensure proper order
+    const sortedPicks = [...picks].sort((a, b) => a.pickNumber - b.pickNumber);
+    
+    // Process picks with optimized lookups
+    for (const { playerName, teamName, pickNumber } of sortedPicks) {
+      try {
+        // Find or create the team
+        let targetTeam = newState.teams.find(t => t.name === teamName);
+        
+        if (!targetTeam) {
+          const draftPosition = calculateDraftPosition(pickNumber, newState.settings.numberOfTeams, newState.settings.draftType);
+          newState = {
+            ...newState,
+            teams: newState.teams.map((team, index) => {
+              if (index + 1 === draftPosition) {
+                const updatedTeam = { ...team, name: teamName };
+                // Transfer roster data to new team name
+                const existingRoster = teamRosterUpdates.get(team.id);
+                if (existingRoster) {
+                  teamRosterUpdates.set(updatedTeam.id, existingRoster);
+                }
+                return updatedTeam;
+              }
+              return team;
+            })
+          };
+          targetTeam = newState.teams.find(t => t.name === teamName);
+        }
+        
+        if (!targetTeam) {
+          console.warn('Could not find or create team for:', teamName);
+          continue;
+        }
+        
+        // Fast player lookup
+        const normalizedPlayerName = playerName.toLowerCase().trim();
+        const cleanPlayerName = normalizedPlayerName.replace(/[.']/g, '').replace(/\s+jr\.?$/, '').replace(/\s+sr\.?$/, '').replace(/\s+iii?$/, '').trim();
+        
+        let player = playerLookup.get(normalizedPlayerName) || playerLookup.get(cleanPlayerName);
+        
+        // Fallback to slower search if fast lookup fails
+        if (!player) {
+          player = newState.players.find(p => {
+            const pName = p.name.toLowerCase();
+            return pName.includes(normalizedPlayerName) || normalizedPlayerName.includes(pName);
+          });
+        }
+        
+        if (!player || updatedPlayerIds.has(player.id)) {
+          if (!player) {
+            console.warn('Player not found for batch sync:', playerName);
+          } else {
+            console.warn('Player already drafted in this batch:', playerName);
+          }
+          continue;
+        }
+        
+        // Mark player as processed
+        updatedPlayerIds.add(player.id);
+        
+        // Create the pick
+        const newPick: DraftPick = {
+          id: `pick-${pickNumber}`,
+          round: Math.ceil(pickNumber / newState.settings.numberOfTeams),
+          pick: ((pickNumber - 1) % newState.settings.numberOfTeams) + 1,
+          overall: pickNumber,
+          team: targetTeam.id,
+          player: { ...player, isDrafted: true, draftedBy: targetTeam.id },
+          timestamp: new Date()
+        };
+        
+        allPicks.push(newPick);
+        
+        // Add to team roster
+        const teamRoster = teamRosterUpdates.get(targetTeam.id);
+        if (teamRoster && player.position in teamRoster) {
+          teamRoster[player.position as Position].push(player);
+        }
+      } catch (pickError) {
+        console.error('Error processing individual pick:', { playerName, teamName, pickNumber }, pickError);
+        // Continue processing other picks
+      }
+    }
+    
+    console.log(`Successfully processed ${allPicks.length} picks out of ${picksCount} attempted`);
+    
+    // Batch update all players efficiently
+    const updatedPlayers = newState.players.map(p => {
+      if (!updatedPlayerIds.has(p.id)) {
+        return p;
+      }
+      
+      const draftInfo = allPicks.find(pick => pick.player?.id === p.id);
+      return { 
+        ...p, 
+        isDrafted: true, 
+        draftedBy: draftInfo?.team 
+      };
+    });
+    
+    // Update all teams with new rosters
+    const updatedTeams = newState.teams.map(team => ({
+      ...team,
+      roster: teamRosterUpdates.get(team.id) || team.roster
+    }));
+    
+    // Calculate new current pick
+    const maxPickNumber = allPicks.length > 0 ? 
+      Math.max(...allPicks.map(p => p.overall), newState.currentPick - 1) : 
+      newState.currentPick - 1;
+    const newCurrentPick = maxPickNumber + 1;
+    const maxPicks = newState.settings.numberOfTeams * newState.settings.numberOfRounds;
+    
+    // Efficiently merge picks
+    const existingPicks = newState.picks.filter(p => !allPicks.some(newPick => newPick.overall === p.overall));
+    const allMergedPicks = [...existingPicks, ...allPicks].sort((a, b) => a.overall - b.overall);
+    
+    return {
+      ...newState,
+      players: updatedPlayers,
+      teams: updatedTeams,
+      picks: allMergedPicks,
+      currentPick: newCurrentPick,
+      isActive: newCurrentPick <= maxPicks,
+      picksUntilMyTurn: calculatePicksUntilMyTurn(newCurrentPick, newState.settings.draftSlot, newState.settings.numberOfTeams, newState.settings.draftType)
+    };
+  } catch (error) {
+    console.error('Error in handleBatchSyncPicks:', error);
+    // Return original state on error to prevent crashes
+    return state;
+  }
 }
 
 // Calculate which draft position (1-12) a pick number corresponds to

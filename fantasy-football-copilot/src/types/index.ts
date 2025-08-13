@@ -152,3 +152,34 @@ export interface SimulationResult {
   availableAtMyTurn: Player[];
   positionsAtRisk: Position[];
 }
+
+export interface HandcuffRecommendation {
+  primaryPlayer: Player;
+  handcuffs: {
+    player: Player;
+    type: 'Direct' | 'Committee' | 'Insurance';
+    priority: 'High' | 'Medium' | 'Low';
+    reasoning: string;
+  }[];
+}
+
+export interface TrendData {
+  playerId: string;
+  playerName: string;
+  position: Position;
+  currentADP: number;
+  previousADP: number;
+  adpChange: number;
+  adpTrend: 'Rising' | 'Falling' | 'Stable';
+  velocityScore: number; // How quickly they're moving
+  lastUpdated: Date;
+}
+
+export interface PositionScarcity {
+  position: Position;
+  tier1Remaining: number;
+  tier2Remaining: number;
+  tier3Remaining: number;
+  avgPicksUntilNextTier: number;
+  scarcityLevel: 'Critical' | 'High' | 'Medium' | 'Low';
+}

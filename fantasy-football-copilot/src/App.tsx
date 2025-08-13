@@ -1,11 +1,14 @@
 import { DraftProvider } from './contexts/DraftContext';
 import AppContent from './components/AppContent';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function App() {
   return (
-    <DraftProvider>
-      <AppContent />
-    </DraftProvider>
+    <ErrorBoundary>
+      <DraftProvider>
+        <AppContent />
+      </DraftProvider>
+    </ErrorBoundary>
   );
 }
 

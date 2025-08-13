@@ -28,6 +28,13 @@ export class DynamicVORPEngine implements DynamicVORPCalculator {
   }
 
   calculateDynamicVORP(player: Player): number {
+    // Safety check for valid position
+    const validPositions: Position[] = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
+    if (!validPositions.includes(player.position)) {
+      console.warn(`Invalid position for player ${player.name}: ${player.position}`);
+      return 0;
+    }
+
     // Safety check for projectedPoints
     if (!player.projectedPoints || isNaN(player.projectedPoints)) {
       console.warn(`Player ${player.name} has invalid projectedPoints:`, player.projectedPoints);

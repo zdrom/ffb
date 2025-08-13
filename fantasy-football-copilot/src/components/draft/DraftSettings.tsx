@@ -63,8 +63,14 @@ const DraftSettings: React.FC<DraftSettingsProps> = ({ onComplete }) => {
   const [settings, setSettings] = useState<DraftSettingsType>({
     ...state.settings,
     teamNames: state.settings.teamNames || Array.from({ length: state.settings.numberOfTeams }, (_, i) => `Pick ${i + 1}`),
-    customScoring: state.settings.customScoring || getDefaultCustomScoring(),
-    positionLimits: state.settings.positionLimits || getDefaultPositionLimits()
+    customScoring: {
+      ...getDefaultCustomScoring(),
+      ...state.settings.customScoring
+    },
+    positionLimits: {
+      ...getDefaultPositionLimits(),
+      ...state.settings.positionLimits
+    }
   });
   const [activeTab, setActiveTab] = useState<'basic' | 'scoring' | 'limits'>('basic');
   const [vorpMetadata, setVorpMetadata] = useState(getGlobalVORPMetadata());

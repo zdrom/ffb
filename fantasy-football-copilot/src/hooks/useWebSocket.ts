@@ -202,27 +202,105 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
     }
 
     console.log(`Using ${players.length} VORP players for draft sync`);
-    console.log('Sample player names:', players.slice(0, 5).map(p => p.name));
+    
+    const totalPicks = syncData.picks.length;
+    console.log(`Syncing ${totalPicks} picks...`);
+
+    // For large datasets (>100 picks), use chunked processing to prevent UI freezing
+    const CHUNK_SIZE = totalPicks > 100 ? 25 : totalPicks;
+    const shouldUseChunkedProcessing = totalPicks > 100;
+
+    // Show user feedback during sync
+    const processingOverlay = document.createElement('div');
+    processingOverlay.id = 'draft-sync-overlay';
+    processingOverlay.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+    
+    const updateOverlay = (processed: number, total: number) => {
+      const percentage = Math.round((processed / total) * 100);
+      processingOverlay.innerHTML = `
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center max-w-sm">
+          <div class="animate-spin h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <h3 class="text-lg font-semibold">Syncing Draft Picks</h3>
+          <p class="text-gray-600">Processing ${processed} of ${total} picks...</p>
+          <div class="w-full bg-gray-200 rounded-full h-2 mt-3">
+            <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: ${percentage}%"></div>
+          </div>
+          <div class="mt-2 text-sm text-blue-600">${percentage}% complete</div>
+          ${total > 100 ? '<div class="mt-1 text-xs text-gray-500">Large dataset - processing in chunks</div>' : ''}
+        </div>
+      `;
+    };
+    
+    updateOverlay(0, totalPicks);
+    document.body.appendChild(processingOverlay);
 
     // Reset draft first
     dispatch({ type: 'RESET_DRAFT' });
 
-    // Process each pick in order using the automatic system
-    syncData.picks.forEach((pickData: any, index: number) => {
-      setTimeout(() => {
-        console.log(`Processing pick ${index + 1}:`, pickData.player, 'to', pickData.team);
+    if (shouldUseChunkedProcessing) {
+      // Process in chunks for large datasets
+      const processChunk = (startIndex: number) => {
+        const endIndex = Math.min(startIndex + CHUNK_SIZE, totalPicks);
+        const chunk = syncData.picks.slice(startIndex, endIndex);
         
-        // Use the new automatic pick system
+        const picks = chunk.map((pickData: any) => ({
+          playerName: pickData.player,
+          teamName: pickData.team,
+          pickNumber: pickData.overall || pickData.pick || (startIndex + 1)
+        }));
+
+        console.log(`Processing chunk ${startIndex + 1}-${endIndex} of ${totalPicks} picks`);
+        
+        // Process chunk
         dispatch({
-          type: 'AUTO_MAKE_PICK',
-          payload: {
-            playerName: pickData.player,
-            teamName: pickData.team,
-            pickNumber: pickData.overall || pickData.pick || (index + 1)
-          }
+          type: 'BATCH_SYNC_PICKS',
+          payload: { picks }
         });
-      }, index * 100); // Small delay between picks to ensure proper order
-    });
+
+        updateOverlay(endIndex, totalPicks);
+
+        // Process next chunk if there are more picks
+        if (endIndex < totalPicks) {
+          setTimeout(() => processChunk(endIndex), 100); // Small delay between chunks
+        } else {
+          // All chunks processed, clean up
+          setTimeout(() => {
+            const overlay = document.getElementById('draft-sync-overlay');
+            if (overlay) {
+              overlay.remove();
+            }
+            console.log('Chunked draft sync completed successfully');
+          }, 500);
+        }
+      };
+
+      // Start chunked processing
+      setTimeout(() => processChunk(0), 300);
+    } else {
+      // Process all at once for smaller datasets
+      setTimeout(() => {
+        const picks = syncData.picks.map((pickData: any, index: number) => ({
+          playerName: pickData.player,
+          teamName: pickData.team,
+          pickNumber: pickData.overall || pickData.pick || (index + 1)
+        }));
+
+        console.log('Processing all picks in single batch:', picks.length);
+        
+        dispatch({
+          type: 'BATCH_SYNC_PICKS',
+          payload: { picks }
+        });
+
+        setTimeout(() => {
+          const overlay = document.getElementById('draft-sync-overlay');
+          if (overlay) {
+            overlay.remove();
+          }
+          console.log('Draft sync completed successfully');
+        }, 500);
+      }, 300);
+    }
   };
 
   // Auto-connect on mount

@@ -1,21 +1,17 @@
 import React from 'react';
-import { Settings, Download, Upload, RotateCcw, BarChart3, Trophy } from 'lucide-react';
+import { Settings, BarChart3, Trophy, History } from 'lucide-react';
 
 interface HeaderProps {
   onSettingsClick: () => void;
   onVORPSettingsClick: () => void;
-  onImportClick: () => void;
-  onExportClick: () => void;
-  onResetClick: () => void;
+  onHistoryClick?: () => void;
   leagueName?: string;
 }
 
 const Header: React.FC<HeaderProps> = ({
   onSettingsClick,
   onVORPSettingsClick,
-  onImportClick,
-  onExportClick,
-  onResetClick,
+  onHistoryClick,
   leagueName
 }) => {
   return (
@@ -44,29 +40,15 @@ const Header: React.FC<HeaderProps> = ({
             VORP Rankings
           </button>
           
-          <button
-            onClick={onImportClick}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <Upload className="h-4 w-4 mr-2" />
-            Import
-          </button>
-          
-          <button
-            onClick={onExportClick}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </button>
-          
-          <button
-            onClick={onResetClick}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <RotateCcw className="h-4 w-4 mr-2" />
-            Reset
-          </button>
+          {onHistoryClick && (
+            <button
+              onClick={onHistoryClick}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              <History className="h-4 w-4 mr-2" />
+              Draft History
+            </button>
+          )}
           
           <button
             onClick={onSettingsClick}
