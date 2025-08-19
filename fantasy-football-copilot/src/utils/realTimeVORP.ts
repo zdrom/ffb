@@ -1,5 +1,55 @@
-import type { Player, DraftState } from '../types';
+import type { Player, DraftState, Position } from '../types';
 import { DynamicVORPEngine } from './dynamicVORP';
+
+// Function to validate and fix roster consistency before VORP calculations
+function validateRosterConsistency(state: DraftState): DraftState {
+  // Check if rosters are consistent with picks
+  let inconsistenciesFound = false;
+  
+  state.teams.forEach(team => {
+    const teamPicks = state.picks.filter(pick => pick.team === team.id);
+    const rosterPlayerCount = Object.values(team.roster).reduce((sum, arr) => sum + arr.length, 0);
+    
+    if (teamPicks.length !== rosterPlayerCount) {
+      inconsistenciesFound = true;
+      console.warn(`⚠️  Roster inconsistency detected for team ${team.name}: ${teamPicks.length} picks vs ${rosterPlayerCount} roster players`);
+    }
+  });
+  
+  // If inconsistencies found, rebuild rosters from picks
+  if (inconsistenciesFound) {
+    console.log('🔧 Auto-fixing roster inconsistencies before VORP calculation');
+    
+    const rebuiltTeams = state.teams.map(team => ({
+      ...team,
+      roster: {
+        QB: [] as Player[],
+        RB: [] as Player[],
+        WR: [] as Player[],
+        TE: [] as Player[],
+        K: [] as Player[],
+        DEF: [] as Player[]
+      }
+    }));
+    
+    // Rebuild rosters from picks
+    state.picks.forEach(pick => {
+      const team = rebuiltTeams.find(t => t.id === pick.team);
+      const player = pick.player;
+      
+      if (team && player && player.position in team.roster) {
+        team.roster[player.position as Position].push(player);
+      }
+    });
+    
+    return {
+      ...state,
+      teams: rebuiltTeams
+    };
+  }
+  
+  return state;
+}
 
 export function updatePlayersVORP(state: DraftState): Player[] {
   if (!state.players.length) return state.players;
@@ -18,10 +68,13 @@ export function updatePlayersVORP(state: DraftState): Player[] {
 }
 
 export function recalculateAllVORP(state: DraftState): DraftState {
-  const updatedPlayers = updatePlayersVORP(state);
+  // First validate and fix any roster inconsistencies
+  const validatedState = validateRosterConsistency(state);
+  
+  const updatedPlayers = updatePlayersVORP(validatedState);
   
   return {
-    ...state,
+    ...validatedState,
     players: updatedPlayers
   };
 }
@@ -32,18 +85,21 @@ export function recalculateIncrementalVORP(state: DraftState, newPickPlayerIds: 
     return state;
   }
 
-  const vorpEngine = new DynamicVORPEngine(state.players, state.settings, state.teams);
+  // First validate and fix any roster inconsistencies
+  const validatedState = validateRosterConsistency(state);
+
+  const vorpEngine = new DynamicVORPEngine(validatedState.players, validatedState.settings, validatedState.teams);
   
   // Only recalculate VORP for players at the same positions as newly drafted players
   const affectedPositions = new Set<string>();
   newPickPlayerIds.forEach(playerId => {
-    const player = state.players.find(p => p.id === playerId);
+    const player = validatedState.players.find(p => p.id === playerId);
     if (player?.position) {
       affectedPositions.add(player.position);
     }
   });
   
-  const updatedPlayers = state.players.map(player => {
+  const updatedPlayers = validatedState.players.map(player => {
     // Skip if player is drafted or not in affected positions
     if (player.isDrafted || !affectedPositions.has(player.position)) {
       return player;
@@ -57,7 +113,7 @@ export function recalculateIncrementalVORP(state: DraftState, newPickPlayerIds: 
   });
   
   return {
-    ...state,
+    ...validatedState,
     players: updatedPlayers
   };
 }

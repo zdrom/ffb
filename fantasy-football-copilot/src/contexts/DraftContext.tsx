@@ -17,7 +17,8 @@ type DraftAction =
   | { type: 'RESET_DRAFT' }
   | { type: 'LOAD_DRAFT_STATE'; payload: DraftState }
   | { type: 'SET_DRAFT_ID'; payload: string | null }
-  | { type: 'AUTO_UPDATE_TEAMS'; payload: { teamName: string; pickNumber: number } };
+  | { type: 'AUTO_UPDATE_TEAMS'; payload: { teamName: string; pickNumber: number } }
+  | { type: 'REBUILD_ROSTERS' };
 
 const initialState: DraftState = {
   settings: {
@@ -195,6 +196,9 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
 
     case 'INCREMENTAL_SYNC_PICKS':
       return handleIncrementalSyncPicks(state, action.payload);
+
+    case 'REBUILD_ROSTERS':
+      return rebuildTeamRostersFromPicks(state);
 
     default:
       return state;
@@ -717,6 +721,45 @@ function calculatePicksUntilMyTurn(currentPick: number, draftSlot: number, numbe
     
     return nextMyPick - currentPick;
   }
+}
+
+// Function to rebuild team rosters from picks data
+function rebuildTeamRostersFromPicks(state: DraftState): DraftState {
+  console.log('🔧 REBUILDING TEAM ROSTERS FROM PICKS DATA');
+  
+  // Initialize empty rosters for all teams
+  const rebuiltTeams = state.teams.map(team => ({
+    ...team,
+    roster: {
+      QB: [],
+      RB: [],
+      WR: [],
+      TE: [],
+      K: [],
+      DEF: []
+    }
+  }));
+  
+  // Add players back to rosters based on picks
+  state.picks.forEach(pick => {
+    const team = rebuiltTeams.find(t => t.id === pick.team);
+    const player = pick.player;
+    
+    if (team && player && player.position in team.roster) {
+      team.roster[player.position as Position].push(player);
+    }
+  });
+  
+  // Log the rebuild results
+  rebuiltTeams.forEach((team, index) => {
+    const playerCount = Object.values(team.roster).reduce((sum, arr) => sum + arr.length, 0);
+    console.log(`  Team ${index + 1} (${team.name}): ${playerCount} players rebuilt`);
+  });
+  
+  return {
+    ...state,
+    teams: rebuiltTeams
+  };
 }
 
 // Helper function to calculate pick numbers for multiple rounds ahead

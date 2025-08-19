@@ -4,8 +4,69 @@ import { useDraft } from '../../contexts/DraftContext';
 import type { Position } from '../../types';
 
 const TeamRosterGrid: React.FC = () => {
-  const { state } = useDraft();
+  const { state, dispatch } = useDraft();
   const positions: Position[] = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
+
+  // Debug function to validate roster integrity
+  React.useEffect(() => {
+    if (state.teams.length > 0 && state.picks.length > 0) {
+      console.log('🔍 ROSTER INTEGRITY CHECK:');
+      
+      // Check each team's roster against picks data
+      state.teams.forEach((team, teamIndex) => {
+        console.log(`\n📋 Team ${teamIndex + 1}: ${team.name} (${team.id})`);
+        console.log(`  isUser: ${team.isUser}`);
+        
+        // Get all picks that should belong to this team
+        const teamPicks = state.picks.filter(pick => pick.team === team.id);
+        console.log(`  Picks assigned to team: ${teamPicks.length}`);
+        
+        // Count players in roster
+        const rosterPlayerCount = positions.reduce((total, pos) => {
+          return total + (team.roster[pos]?.length || 0);
+        }, 0);
+        console.log(`  Players in roster: ${rosterPlayerCount}`);
+        
+        // Check for discrepancies
+        if (teamPicks.length !== rosterPlayerCount) {
+          console.warn(`⚠️  MISMATCH: Team ${team.name} has ${teamPicks.length} picks but ${rosterPlayerCount} roster players`);
+          
+          // Detail the mismatch
+          positions.forEach(pos => {
+            const posRosterCount = team.roster[pos]?.length || 0;
+            const posPickCount = teamPicks.filter(pick => pick.player?.position === pos).length;
+            if (posRosterCount !== posPickCount) {
+              console.warn(`    ${pos}: ${posPickCount} picks vs ${posRosterCount} roster players`);
+              
+              // Show actual players
+              const pickPlayers = teamPicks.filter(pick => pick.player?.position === pos).map(p => p.player?.name);
+              const rosterPlayers = team.roster[pos]?.map(p => p.name) || [];
+              console.log(`      Pick players: [${pickPlayers.join(', ')}]`);
+              console.log(`      Roster players: [${rosterPlayers.join(', ')}]`);
+            }
+          });
+        }
+      });
+
+      // Also check player.draftedBy consistency
+      console.log('\n🎯 PLAYER DRAFTED-BY CHECK:');
+      const draftedPlayers = state.players.filter(p => p.isDrafted);
+      draftedPlayers.forEach(player => {
+        const teamId = player.draftedBy;
+        const team = state.teams.find(t => t.id === teamId);
+        
+        if (!team) {
+          console.warn(`⚠️  Player ${player.name} draftedBy team ${teamId} but team not found`);
+          return;
+        }
+        
+        const isInRoster = team.roster[player.position]?.some(p => p.id === player.id);
+        if (!isInRoster) {
+          console.warn(`⚠️  Player ${player.name} draftedBy ${team.name} but not in team's ${player.position} roster`);
+        }
+      });
+    }
+  }, [state.teams, state.picks, state.players]);
 
   const getPositionColor = (position: Position) => {
     const colors = {
@@ -75,9 +136,18 @@ const TeamRosterGrid: React.FC = () => {
   return (
     <div className="bg-white rounded-lg shadow">
       <div className="px-6 py-4 border-b border-gray-200">
-        <div className="flex items-center">
-          <Users className="h-5 w-5 text-gray-500 mr-2" />
-          <h2 className="text-lg font-semibold text-gray-900">Team Rosters</h2>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <Users className="h-5 w-5 text-gray-500 mr-2" />
+            <h2 className="text-lg font-semibold text-gray-900">Team Rosters</h2>
+          </div>
+          <button
+            onClick={() => dispatch({ type: 'REBUILD_ROSTERS' })}
+            className="px-3 py-1 text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 rounded border border-orange-300"
+            title="Rebuild team rosters from picks data to fix inconsistencies"
+          >
+            🔧 Fix Rosters
+          </button>
         </div>
       </div>
 
