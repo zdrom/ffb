@@ -36,7 +36,6 @@ export interface Team {
 }
 
 export interface DraftSettings {
-  leagueName: string;
   scoringType: 'PPR' | 'Half-PPR' | 'Standard' | 'Custom';
   numberOfTeams: number;
   draftSlot: number;
@@ -58,7 +57,6 @@ export interface RosterSlots {
   'W/R/T'?: number;
   K: number;
   DEF: number;
-  BENCH: number;
 }
 
 export interface PositionLimits {

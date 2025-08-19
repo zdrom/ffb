@@ -314,4 +314,4 @@ const PlayerList: React.FC = () => {
   );
 };
 
-export default PlayerList;
+export default React.memo(PlayerList);

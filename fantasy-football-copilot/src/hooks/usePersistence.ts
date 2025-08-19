@@ -22,13 +22,12 @@ export const usePersistence = () => {
 
   const exportDraftData = () => {
     const timestamp = new Date().toISOString().split('T')[0];
-    const leagueName = state.settings.leagueName || 'Fantasy League';
     
     // Export full draft state as JSON
     const draftStateJson = StorageManager.exportDraftState(state);
     StorageManager.downloadFile(
       draftStateJson,
-      `${leagueName.replace(/\s+/g, '_')}_draft_state_${timestamp}.json`,
+      `draft_state_${timestamp}.json`,
       'application/json'
     );
 
@@ -36,7 +35,7 @@ export const usePersistence = () => {
     const draftBoardCsv = StorageManager.exportDraftBoard(state);
     StorageManager.downloadFile(
       draftBoardCsv,
-      `${leagueName.replace(/\s+/g, '_')}_draft_board_${timestamp}.csv`,
+      `draft_board_${timestamp}.csv`,
       'text/csv'
     );
 
@@ -44,7 +43,7 @@ export const usePersistence = () => {
     const rostersCsv = StorageManager.exportTeamRosters(state);
     StorageManager.downloadFile(
       rostersCsv,
-      `${leagueName.replace(/\s+/g, '_')}_team_rosters_${timestamp}.csv`,
+      `team_rosters_${timestamp}.csv`,
       'text/csv'
     );
   };

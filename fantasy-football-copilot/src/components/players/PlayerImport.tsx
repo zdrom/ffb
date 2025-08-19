@@ -1,5 +1,5 @@
 import React from 'react';
-import { BarChart3, Trophy } from 'lucide-react';
+import { Trophy } from 'lucide-react';
 
 interface PlayerImportProps {
   onComplete: () => void;

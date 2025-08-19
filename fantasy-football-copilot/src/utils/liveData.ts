@@ -23,14 +23,14 @@ interface SleeperTrendingPlayer {
   count: number;
 }
 
-interface SleeperStats {
-  [playerId: string]: {
-    pts_ppr?: number;
-    pts_std?: number;
-    pts_half_ppr?: number;
-    gp?: number;
-  };
-}
+// interface SleeperStats {
+//   [playerId: string]: {
+//     pts_ppr?: number;
+//     pts_std?: number;
+//     pts_half_ppr?: number;
+//     gp?: number;
+//   };
+// }
 
 let playersCache: { [key: string]: SleeperPlayer } | null = null;
 let cacheExpiry = 0;

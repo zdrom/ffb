@@ -1,5 +1,5 @@
 // Draft persistence utilities for saving/loading draft state
-import type { DraftState } from '../contexts/DraftContext';
+import type { DraftState } from '../types';
 
 const DRAFT_STORAGE_KEY = 'fantasy-draft-copilot-draft';
 const DRAFTS_LIST_KEY = 'fantasy-draft-copilot-drafts-list';
@@ -7,7 +7,6 @@ const DRAFTS_LIST_KEY = 'fantasy-draft-copilot-drafts-list';
 export interface SavedDraft {
   id: string;
   name: string;
-  leagueName: string;
   createdAt: string;
   lastModified: string;
   draftState: DraftState;
@@ -31,7 +30,6 @@ export function saveDraft(draftState: DraftState, draftName?: string): string {
     const savedDraft: SavedDraft = {
       id: draftId,
       name: draftName || `Draft - ${new Date().toLocaleString()}`,
-      leagueName: draftState.settings.leagueName,
       createdAt: now,
       lastModified: now,
       draftState: minimalState
@@ -45,7 +43,6 @@ export function saveDraft(draftState: DraftState, draftName?: string): string {
     draftsList.push({
       id: draftId,
       name: savedDraft.name,
-      leagueName: savedDraft.leagueName,
       createdAt: savedDraft.createdAt,
       lastModified: savedDraft.lastModified
     });
@@ -72,7 +69,6 @@ export function saveDraft(draftState: DraftState, draftName?: string): string {
       localStorage.setItem(`${DRAFT_STORAGE_KEY}-${draftId}`, JSON.stringify({
         id: draftId,
         name: draftName || 'Minimal Draft',
-        leagueName: draftState.settings.leagueName,
         createdAt: new Date().toISOString(),
         lastModified: new Date().toISOString(),
         draftState: minimalDraft
@@ -138,7 +134,6 @@ export function updateDraft(draftId: string, draftState: DraftState, draftName?:
       draftsList[draftIndex] = {
         id: draftId,
         name: updatedDraft.name,
-        leagueName: updatedDraft.leagueName,
         createdAt: updatedDraft.createdAt,
         lastModified: updatedDraft.lastModified
       };
@@ -173,7 +168,6 @@ export function loadDraft(draftId: string): SavedDraft | null {
 export function getSavedDraftsList(): Array<{
   id: string;
   name: string;
-  leagueName: string;
   createdAt: string;
   lastModified: string;
 }> {
@@ -209,14 +203,15 @@ export function deleteDraft(draftId: string): void {
 }
 
 // Auto-save current draft (debounced)
-let autoSaveTimeout: NodeJS.Timeout | null = null;
+let autoSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 export function autoSaveDraft(draftState: DraftState, currentDraftId?: string): void {
   // Disable auto-save for now to prevent quota issues
   return;
   
   // Clear existing timeout
-  if (autoSaveTimeout) {
-    clearTimeout(autoSaveTimeout);
+  if (autoSaveTimeout !== null) {
+    clearTimeout(autoSaveTimeout as any);
+    autoSaveTimeout = null;
   }
 
   // Set new timeout for 30 seconds (increased from 2 seconds)
@@ -307,7 +302,6 @@ export function importDraft(file: File): Promise<string> {
         draftsList.push({
           id: newId,
           name: importedDraft.name,
-          leagueName: importedDraft.leagueName,
           createdAt: importedDraft.createdAt,
           lastModified: importedDraft.lastModified
         });

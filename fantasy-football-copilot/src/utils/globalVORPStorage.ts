@@ -55,10 +55,6 @@ export function saveGlobalVORPRankings(players: Player[], source: string = 'Manu
       version: '1.0'
     };
 
-    const globalData: GlobalVORPData = {
-      players,
-      metadata
-    };
 
     localStorage.setItem(GLOBAL_VORP_STORAGE_KEY, JSON.stringify(players));
     localStorage.setItem(GLOBAL_VORP_METADATA_KEY, JSON.stringify(metadata));

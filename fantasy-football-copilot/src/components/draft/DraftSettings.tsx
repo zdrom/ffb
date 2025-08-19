@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDraft } from '../../contexts/DraftContext';
-import { loadGlobalVORPRankings, hasGlobalVORPRankings, getGlobalVORPMetadata } from '../../utils/globalVORPStorage';
+import { loadGlobalVORPRankings, getGlobalVORPMetadata } from '../../utils/globalVORPStorage';
 import type { DraftSettings as DraftSettingsType, CustomScoring, PositionLimits } from '../../types';
 
 const getDefaultCustomScoring = (): CustomScoring => ({
@@ -73,7 +73,7 @@ const DraftSettings: React.FC<DraftSettingsProps> = ({ onComplete }) => {
     }
   });
   const [activeTab, setActiveTab] = useState<'basic' | 'scoring' | 'limits'>('basic');
-  const [vorpMetadata, setVorpMetadata] = useState(getGlobalVORPMetadata());
+  const [vorpMetadata] = useState(getGlobalVORPMetadata());
 
   // Update team names when number of teams changes - use Pick format for automatic detection
   useEffect(() => {
@@ -204,21 +204,7 @@ const DraftSettings: React.FC<DraftSettingsProps> = ({ onComplete }) => {
           <div className="space-y-6">
             <div className="space-y-6">
               {/* League Info */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    League Name
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.leagueName}
-                    onChange={(e) => updateSettings('leagueName', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Enter league name"
-                    required
-                  />
-                </div>
-
+              <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Scoring Type

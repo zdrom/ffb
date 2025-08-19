@@ -224,4 +224,4 @@ const AlertsPanel: React.FC = () => {
   );
 };
 
-export default AlertsPanel;
+export default React.memo(AlertsPanel);

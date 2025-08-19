@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useReducer, type ReactNode } from 'react';
 import type { DraftState, DraftPick, Player, Team, DraftSettings, Position } from '../types';
 import { autoSaveDraft } from '../utils/draftPersistence';
+import { recalculateAllVORP, recalculateIncrementalVORP } from '../utils/realTimeVORP';
+import { findPlayerWithMapping } from '../utils/playerNameMapping';
 
 type DraftAction =
   | { type: 'SET_SETTINGS'; payload: DraftSettings }
@@ -8,6 +10,7 @@ type DraftAction =
   | { type: 'MAKE_PICK'; payload: { playerId: string; teamId: string } }
   | { type: 'AUTO_MAKE_PICK'; payload: { playerName: string; teamName: string; pickNumber: number } }
   | { type: 'BATCH_SYNC_PICKS'; payload: { picks: { playerName: string; teamName: string; pickNumber: number }[] } }
+  | { type: 'INCREMENTAL_SYNC_PICKS'; payload: { picks: { playerName: string; teamName: string; pickNumber: number }[] } }
   | { type: 'TOGGLE_TARGET'; payload: string }
   | { type: 'TOGGLE_DO_NOT_DRAFT'; payload: string }
   | { type: 'UPDATE_PLAYER_RANKINGS'; payload: Player[] }
@@ -18,7 +21,6 @@ type DraftAction =
 
 const initialState: DraftState = {
   settings: {
-    leagueName: '',
     scoringType: 'PPR',
     numberOfTeams: 12,
     draftSlot: 1,
@@ -32,8 +34,7 @@ const initialState: DraftState = {
       TE: 1,
       'W/R/T': 1,
       K: 1,
-      DEF: 1,
-      BENCH: 6
+      DEF: 1
     }
   },
   players: [],
@@ -116,7 +117,7 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
       const nextPick = state.currentPick + 1;
       const maxPicks = state.settings.numberOfTeams * state.settings.numberOfRounds;
       
-      return {
+      const newState = {
         ...state,
         players: updatedPlayers,
         teams: updatedTeams,
@@ -125,6 +126,8 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
         isActive: nextPick <= maxPicks,
         picksUntilMyTurn: calculatePicksUntilMyTurn(nextPick, state.settings.draftSlot, state.settings.numberOfTeams, state.settings.draftType)
       };
+
+      return recalculateAllVORP(newState);
 
     case 'TOGGLE_TARGET':
       return {
@@ -190,9 +193,28 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
     case 'BATCH_SYNC_PICKS':
       return handleBatchSyncPicks(state, action.payload);
 
+    case 'INCREMENTAL_SYNC_PICKS':
+      return handleIncrementalSyncPicks(state, action.payload);
+
     default:
       return state;
   }
+}
+
+// Utility function to validate and clean player state
+function validatePlayerDraftedState(players: Player[]): Player[] {
+  return players.map(player => {
+    // Ensure consistency: if draftedBy is set, isDrafted should be true
+    if (player.draftedBy && !player.isDrafted) {
+      console.warn(`Fixing inconsistent state for ${player.name}: draftedBy set but isDrafted false`);
+      return { ...player, isDrafted: true };
+    }
+    // Ensure consistency: if isDrafted is true but no draftedBy, log warning
+    if (player.isDrafted && !player.draftedBy) {
+      console.warn(`Potential inconsistent state for ${player.name}: isDrafted true but no draftedBy`);
+    }
+    return player;
+  });
 }
 
 // Handler for automatically making picks from Chrome extension data
@@ -276,7 +298,7 @@ function handleAutoMakePick(state: DraftState, payload: { playerName: string; te
   const newCurrentPick = Math.max(state.currentPick, pickNumber + 1);
   const maxPicks = state.settings.numberOfTeams * state.settings.numberOfRounds;
   
-  return {
+  const newState = {
     ...state,
     players: updatedPlayers,
     teams: updatedTeams,
@@ -285,6 +307,8 @@ function handleAutoMakePick(state: DraftState, payload: { playerName: string; te
     isActive: newCurrentPick <= maxPicks,
     picksUntilMyTurn: calculatePicksUntilMyTurn(newCurrentPick, state.settings.draftSlot, state.settings.numberOfTeams, state.settings.draftType)
   };
+
+  return recalculateAllVORP(newState);
 }
 
 // Handler for updating team names from Chrome extension data
@@ -306,6 +330,168 @@ function handleAutoUpdateTeams(state: DraftState, payload: { teamName: string; p
     ...state,
     teams: updatedTeams
   };
+}
+
+// Handler for incremental syncing - only adds new picks without replacing existing ones
+function handleIncrementalSyncPicks(state: DraftState, payload: { picks: { playerName: string; teamName: string; pickNumber: number }[] }): DraftState {
+  try {
+    let newState = { ...state };
+    const picks = payload.picks;
+    const picksCount = picks.length;
+    
+    if (picksCount === 0) {
+      console.log('No new picks to process incrementally');
+      return state;
+    }
+    
+    console.log(`Processing ${picksCount} new picks incrementally (optimized)`);
+    
+    // Lightweight processing - only essential operations for incremental sync
+    const newPicks: DraftPick[] = [];
+    const playerLookupCache = new Map<string, Player>();
+    const teamLookupCache = new Map<string, Team>();
+    
+    // Build minimal lookup caches
+    newState.players.forEach(player => {
+      if (!player.isDrafted) { // Only cache undrafted players for performance
+        const key = player.name.toLowerCase().trim();
+        playerLookupCache.set(key, player);
+      }
+    });
+    
+    newState.teams.forEach(team => {
+      teamLookupCache.set(team.name, team);
+    });
+    
+    // Process picks with minimal overhead
+    for (const { playerName, teamName, pickNumber } of picks) {
+      // Quick duplicate check
+      if (newState.picks.some(p => p.overall === pickNumber)) {
+        continue;
+      }
+      
+      // Fast lookups
+      const playerKey = playerName.toLowerCase().trim();
+      let player = playerLookupCache.get(playerKey);
+      
+      if (!player) {
+        // Fallback search only if needed
+        player = newState.players.find(p => 
+          !p.isDrafted && (
+            p.name.toLowerCase().includes(playerKey) || 
+            playerKey.includes(p.name.toLowerCase())
+          )
+        );
+      }
+      
+      if (!player) {
+        console.warn('Player not found for incremental sync:', playerName);
+        continue;
+      }
+      
+      // Find or create team (simplified)
+      let targetTeam = teamLookupCache.get(teamName);
+      if (!targetTeam) {
+        const draftPosition = calculateDraftPosition(pickNumber, newState.settings.numberOfTeams, newState.settings.draftType);
+        const teamIndex = draftPosition - 1;
+        if (teamIndex >= 0 && teamIndex < newState.teams.length) {
+          targetTeam = { ...newState.teams[teamIndex], name: teamName };
+          newState.teams[teamIndex] = targetTeam;
+          teamLookupCache.set(teamName, targetTeam);
+        }
+      }
+      
+      if (!targetTeam) {
+        console.warn('Could not find team for:', teamName);
+        continue;
+      }
+      
+      // Create pick with minimal processing
+      const newPick: DraftPick = {
+        id: `pick-${pickNumber}`,
+        round: Math.ceil(pickNumber / newState.settings.numberOfTeams),
+        pick: ((pickNumber - 1) % newState.settings.numberOfTeams) + 1,
+        overall: pickNumber,
+        team: targetTeam.id,
+        player: { ...player, isDrafted: true, draftedBy: targetTeam.id },
+        timestamp: new Date()
+      };
+      
+      newPicks.push(newPick);
+      
+      // Remove from cache to prevent double-processing
+      playerLookupCache.delete(playerKey);
+    }
+    
+    if (newPicks.length === 0) {
+      return newState;
+    }
+    
+    console.log(`Processed ${newPicks.length} incremental picks - applying changes`);
+    
+    // Apply changes efficiently with strict state consistency
+    const draftedPlayerIds = new Set(newPicks.map(pick => pick.player?.id).filter(Boolean));
+    const updatedPlayers = newState.players.map(p => {
+      if (draftedPlayerIds.has(p.id)) {
+        const pick = newPicks.find(pick => pick.player?.id === p.id);
+        if (pick) {
+          // Ensure both flags are set for consistent state
+          return { ...p, isDrafted: true, draftedBy: pick.team };
+        }
+      }
+      return p;
+    });
+    
+    // Update team rosters efficiently
+    const updatedTeams = newState.teams.map(team => {
+      const teamPicks = newPicks.filter(pick => pick.team === team.id);
+      if (teamPicks.length === 0) return team;
+      
+      const newRoster = { ...team.roster };
+      teamPicks.forEach(pick => {
+        const player = pick.player;
+        if (player && player.position in newRoster) {
+          newRoster[player.position as Position] = [...newRoster[player.position as Position], player];
+        }
+      });
+      
+      return { ...team, roster: newRoster };
+    });
+    
+    // Merge picks efficiently
+    const allPicks = [...newState.picks, ...newPicks].sort((a, b) => a.overall - b.overall);
+    
+    // Calculate new state
+    const maxPickNumber = Math.max(...allPicks.map(p => p.overall), newState.currentPick - 1);
+    const newCurrentPick = maxPickNumber + 1;
+    const maxPicks = newState.settings.numberOfTeams * newState.settings.numberOfRounds;
+    
+    const baseState = {
+      ...newState,
+      players: validatePlayerDraftedState(updatedPlayers),
+      teams: updatedTeams,
+      picks: allPicks,
+      currentPick: newCurrentPick,
+      isActive: newCurrentPick <= maxPicks,
+      picksUntilMyTurn: calculatePicksUntilMyTurn(newCurrentPick, newState.settings.draftSlot, newState.settings.numberOfTeams, newState.settings.draftType)
+    };
+
+    // Use optimized incremental VORP recalculation
+    const newPickPlayerIds = newPicks.map(pick => pick.player?.id).filter(Boolean) as string[];
+    
+    if (newPicks.length <= 5) {
+      // For small updates, use incremental VORP recalculation (only affected positions)
+      return recalculateIncrementalVORP(baseState, newPickPlayerIds);
+    } else {
+      // For larger updates, skip VORP recalculation to prevent UI freeze
+      // VORP will be recalculated on next manual interaction
+      console.log(`Skipping VORP recalculation for large incremental sync (${newPicks.length} picks) to prevent UI freeze`);
+      return baseState;
+    }
+  } catch (error) {
+    console.error('Error in handleIncrementalSyncPicks:', error);
+    return state;
+  }
 }
 
 // Handler for batch syncing multiple picks efficiently
@@ -390,12 +576,9 @@ function handleBatchSyncPicks(state: DraftState, payload: { picks: { playerName:
         
         let player = playerLookup.get(normalizedPlayerName) || playerLookup.get(cleanPlayerName);
         
-        // Fallback to slower search if fast lookup fails
+        // Use enhanced mapping system for player search
         if (!player) {
-          player = newState.players.find(p => {
-            const pName = p.name.toLowerCase();
-            return pName.includes(normalizedPlayerName) || normalizedPlayerName.includes(pName);
-          });
+          player = findPlayerWithMapping(playerName, newState.players) || undefined;
         }
         
         if (!player || updatedPlayerIds.has(player.id)) {
@@ -436,18 +619,22 @@ function handleBatchSyncPicks(state: DraftState, payload: { picks: { playerName:
     
     console.log(`Successfully processed ${allPicks.length} picks out of ${picksCount} attempted`);
     
-    // Batch update all players efficiently
+    // Batch update all players efficiently with strict consistency
     const updatedPlayers = newState.players.map(p => {
       if (!updatedPlayerIds.has(p.id)) {
         return p;
       }
       
       const draftInfo = allPicks.find(pick => pick.player?.id === p.id);
-      return { 
-        ...p, 
-        isDrafted: true, 
-        draftedBy: draftInfo?.team 
-      };
+      if (draftInfo) {
+        // Ensure both drafted flags are properly set
+        return { 
+          ...p, 
+          isDrafted: true, 
+          draftedBy: draftInfo.team 
+        };
+      }
+      return p;
     });
     
     // Update all teams with new rosters
@@ -467,15 +654,17 @@ function handleBatchSyncPicks(state: DraftState, payload: { picks: { playerName:
     const existingPicks = newState.picks.filter(p => !allPicks.some(newPick => newPick.overall === p.overall));
     const allMergedPicks = [...existingPicks, ...allPicks].sort((a, b) => a.overall - b.overall);
     
-    return {
+    const finalState = {
       ...newState,
-      players: updatedPlayers,
+      players: validatePlayerDraftedState(updatedPlayers),
       teams: updatedTeams,
       picks: allMergedPicks,
       currentPick: newCurrentPick,
       isActive: newCurrentPick <= maxPicks,
       picksUntilMyTurn: calculatePicksUntilMyTurn(newCurrentPick, newState.settings.draftSlot, newState.settings.numberOfTeams, newState.settings.draftType)
     };
+
+    return recalculateAllVORP(finalState);
   } catch (error) {
     console.error('Error in handleBatchSyncPicks:', error);
     // Return original state on error to prevent crashes

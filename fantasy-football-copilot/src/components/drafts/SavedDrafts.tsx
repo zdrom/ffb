@@ -20,7 +20,6 @@ const SavedDrafts: React.FC<SavedDraftsProps> = ({ onClose }) => {
   const [savedDrafts, setSavedDrafts] = useState<Array<{
     id: string;
     name: string;
-    leagueName: string;
     createdAt: string;
     lastModified: string;
   }>>([]);
@@ -38,7 +37,7 @@ const SavedDrafts: React.FC<SavedDraftsProps> = ({ onClose }) => {
       setError(null);
       
       const draftName = prompt('Enter a name for this draft:', 
-        state.settings.leagueName || `Draft - ${new Date().toLocaleDateString()}`);
+        `Draft - ${new Date().toLocaleDateString()}`);
       
       if (draftName) {
         const draftId = saveDraft(state, draftName);
@@ -207,7 +206,7 @@ const SavedDrafts: React.FC<SavedDraftsProps> = ({ onClose }) => {
                   <div className="flex items-center text-sm text-gray-600 space-x-4 mb-2">
                     <div className="flex items-center">
                       <Users className="h-4 w-4 mr-1" />
-                      {draft.leagueName || 'Unnamed League'}
+                      Fantasy Draft
                     </div>
                     <div className="flex items-center">
                       <Calendar className="h-4 w-4 mr-1" />

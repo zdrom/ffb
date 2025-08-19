@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
   saveGlobalVORPRankings, 
-  loadGlobalVORPRankings, 
   getGlobalVORPMetadata, 
   hasGlobalVORPRankings,
   clearGlobalVORPRankings,
@@ -9,8 +8,7 @@ import {
   importGlobalVORPRankings,
   type VORPMetadata 
 } from '../../utils/globalVORPStorage';
-import { parseVORPRankings, parseVORPRankingsDetailed, validateVORPData, generateSampleVORPData } from '../../utils/vorpParser';
-import type { Player } from '../../types';
+import { parseVORPRankingsDetailed, validateVORPData, generateSampleVORPData } from '../../utils/vorpParser';
 
 interface GlobalVORPSettingsProps {
   onRankingsUpdated?: () => void;

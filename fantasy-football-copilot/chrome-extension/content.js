@@ -4,6 +4,32 @@ console.log('Yahoo Draft Companion content script loaded');
 // Configuration
 let teamMapping = {};
 let syncButton = null;
+let autoSyncEnabled = true;
+let lastSyncedPicks = new Set(); // Track which picks we've already synced
+let draftResultsObserver = null;
+let autoSyncInterval = null;
+let autoSyncDebounceTimer = null;
+let isCurrentlySyncing = false;
+let verificationInterval = null;
+let lastVerificationTime = 0;
+
+// Helper function to check if extension context is still valid
+function isExtensionContextValid() {
+  try {
+    // Try to access chrome.runtime - if it throws, the context is invalidated
+    return !!(chrome && chrome.runtime && chrome.runtime.id);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Global error handler for extension context invalidation
+window.addEventListener('error', (event) => {
+  if (event.error && event.error.message && event.error.message.includes('Extension context invalidated')) {
+    console.log('Extension context invalidated globally, stopping all operations');
+    stopAutoSync();
+  }
+});
 
 // Initialize the extension
 init();
@@ -11,21 +37,49 @@ init();
 async function init() {
   console.log('Initializing Yahoo Draft Companion...');
   
+  // Check if extension context is valid before proceeding
+  if (!isExtensionContextValid()) {
+    console.log('Extension context invalidated, skipping initialization');
+    return;
+  }
+  
   // Get settings from background script
   try {
-    const settings = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'get_settings' }, resolve);
+    const settings = await new Promise((resolve, reject) => {
+      if (!isExtensionContextValid()) {
+        reject(new Error('Extension context invalidated'));
+        return;
+      }
+      
+      chrome.runtime.sendMessage({ type: 'get_settings' }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
     });
     
     teamMapping = settings.teamMapping || {};
     console.log('Team mapping loaded:', teamMapping);
   } catch (error) {
     console.error('Failed to load settings:', error);
+    // Continue without settings if extension context is invalidated
+    if (error.message.includes('Extension context invalidated')) {
+      return;
+    }
   }
 
   // Check if we're on the draft page
   if (isDraftPage()) {
     addSyncButton();
+    
+    // Start auto-sync if we're on the draft results tab
+    setTimeout(() => {
+      if (isDraftResultsTabActive()) {
+        startAutoSync();
+      }
+    }, 2000);
   }
 }
 
@@ -34,6 +88,370 @@ function isDraftPage() {
          window.location.href.includes('/draftclient') ||
          document.querySelector('[data-testid="draft-results"]') !== null ||
          document.querySelector('[id="draft"]') !== null;
+}
+
+function isDraftResultsTabActive() {
+  // Check if we're on the draft results tab using the specific selector mentioned by user
+  const draftResultsTab = document.querySelector('button[role="heading"][data-id="results"][aria-selected="true"] div._ys_1dbz5fh');
+  if (draftResultsTab && draftResultsTab.textContent.includes('Draft Results')) {
+    console.log('Draft Results tab is active');
+    return true;
+  }
+  
+  // Fallback check for other possible selectors
+  const fallbackSelectors = [
+    'button[data-id="results"][aria-selected="true"]',
+    '[aria-selected="true"]',
+    '.draft-results-tab[aria-selected="true"]',
+    'button[aria-selected="true"]'
+  ];
+  
+  for (const selector of fallbackSelectors) {
+    const elements = document.querySelectorAll(selector);
+    for (const element of elements) {
+      if (element && element.textContent?.includes('Draft Results')) {
+        console.log('Draft Results tab detected via fallback selector:', selector);
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+function hasResultsByRoundTable() {
+  const table = document.querySelector('#results-by-round');
+  return table !== null;
+}
+
+function startAutoSync() {
+  if (autoSyncInterval) {
+    clearInterval(autoSyncInterval);
+  }
+  
+  console.log('Starting auto-sync monitoring...');
+  
+  // Check every 5 seconds for new picks when on draft results tab (increased from 3s to reduce load)
+  autoSyncInterval = setInterval(() => {
+    if (isDraftResultsTabActive() && hasResultsByRoundTable() && !isCurrentlySyncing) {
+      debouncedCheckForNewPicks();
+    }
+  }, 5000);
+  
+  // Also set up a mutation observer for more immediate detection
+  setupDraftResultsObserver();
+  
+  // Set up periodic verification to check for gaps every 2 minutes
+  startPeriodicVerification();
+}
+
+// Debounced version of checkForNewPicks to prevent excessive sync calls
+function debouncedCheckForNewPicks() {
+  if (autoSyncDebounceTimer) {
+    clearTimeout(autoSyncDebounceTimer);
+  }
+  
+  autoSyncDebounceTimer = setTimeout(() => {
+    if (!isCurrentlySyncing) {
+      checkForNewPicks();
+    }
+  }, 1000); // Wait 1 second after last trigger before actually checking
+}
+
+function stopAutoSync() {
+  if (autoSyncInterval) {
+    clearInterval(autoSyncInterval);
+    autoSyncInterval = null;
+    console.log('Auto-sync stopped');
+  }
+  
+  if (autoSyncDebounceTimer) {
+    clearTimeout(autoSyncDebounceTimer);
+    autoSyncDebounceTimer = null;
+  }
+  
+  if (draftResultsObserver) {
+    draftResultsObserver.disconnect();
+    draftResultsObserver = null;
+  }
+  
+  if (verificationInterval) {
+    clearInterval(verificationInterval);
+    verificationInterval = null;
+  }
+}
+
+function startPeriodicVerification() {
+  if (verificationInterval) {
+    clearInterval(verificationInterval);
+  }
+  
+  // Check for draft completeness every 2 minutes
+  verificationInterval = setInterval(() => {
+    if (isDraftResultsTabActive() && !isCurrentlySyncing) {
+      const now = Date.now();
+      const timeSinceLastVerification = now - lastVerificationTime;
+      
+      // Only verify if it's been at least 90 seconds since last verification
+      if (timeSinceLastVerification > 90000) {
+        performPeriodicVerification();
+      }
+    }
+  }, 120000); // 2 minutes
+}
+
+function performPeriodicVerification() {
+  try {
+    const allPicks = parseDraftPicks();
+    if (allPicks.length < 10) {
+      // Don't verify if draft is just starting (less than 10 picks)
+      return;
+    }
+    
+    lastVerificationTime = Date.now();
+    
+    // Check if we have a reasonable number of picks for verification
+    const syncedCount = lastSyncedPicks.size;
+    const availableCount = allPicks.length;
+    
+    console.log(`Periodic verification: ${syncedCount} synced, ${availableCount} available`);
+    
+    // If there's a significant discrepancy, do verification sync
+    if (availableCount > syncedCount + 5) {
+      console.log('Significant discrepancy detected - performing verification sync');
+      performFullSyncWithGapFilling(allPicks);
+    }
+  } catch (error) {
+    console.error('Error in periodic verification:', error);
+  }
+}
+
+function setupDraftResultsObserver() {
+  if (draftResultsObserver) {
+    draftResultsObserver.disconnect();
+  }
+  
+  const resultsTable = document.querySelector('#results-by-round');
+  if (!resultsTable) {
+    console.log('Results table not found for observer setup');
+    return;
+  }
+  
+  draftResultsObserver = new MutationObserver((mutations) => {
+    let hasNewRows = false;
+    
+    mutations.forEach((mutation) => {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE && 
+              (node.tagName === 'TR' || node.querySelector('tr'))) {
+            hasNewRows = true;
+          }
+        });
+      }
+    });
+    
+    if (hasNewRows && isDraftResultsTabActive() && !isCurrentlySyncing) {
+      console.log('New table rows detected, checking for new picks...');
+      debouncedCheckForNewPicks(); // Use debounced version
+    }
+  });
+  
+  // Observe changes to the table body
+  const tbody = resultsTable.querySelector('tbody') || resultsTable;
+  draftResultsObserver.observe(tbody, {
+    childList: true,
+    subtree: true
+  });
+  
+  console.log('Draft results observer set up');
+}
+
+function checkForNewPicks() {
+  if (!autoSyncEnabled || !isDraftResultsTabActive() || isCurrentlySyncing) {
+    return;
+  }
+  
+  try {
+    // Check if extension context is still valid
+    if (!isExtensionContextValid()) {
+      console.log('Extension context invalidated, stopping auto-sync');
+      stopAutoSync();
+      return;
+    }
+    
+    const allPicks = parseDraftPicks();
+    if (allPicks.length === 0) {
+      return;
+    }
+    
+    // Sort picks by overall pick number to ensure proper sequence
+    allPicks.sort((a, b) => a.overall - b.overall);
+    
+    // Find picks that we haven't synced yet
+    const newPicks = allPicks.filter(pick => {
+      const pickId = `${pick.overall}-${pick.player}-${pick.team}`;
+      return !lastSyncedPicks.has(pickId);
+    });
+    
+    if (newPicks.length > 0) {
+      console.log(`Found ${newPicks.length} new picks to sync:`, newPicks);
+      
+      // Check for gaps in the sequence and handle accordingly
+      const picksWithGaps = ensureSequentialIntegrity(allPicks, newPicks);
+      
+      if (picksWithGaps.needsFullSync) {
+        console.log('Gap detected in draft sequence - performing full sync to ensure completeness');
+        performFullSyncWithGapFilling(allPicks);
+      } else {
+        syncNewPicks(picksWithGaps.incrementalPicks);
+      }
+    }
+  } catch (error) {
+    if (error.message && error.message.includes('Extension context invalidated')) {
+      console.log('Extension context invalidated during sync, stopping auto-sync');
+      stopAutoSync();
+    } else {
+      console.error('Error checking for new picks:', error);
+    }
+    isCurrentlySyncing = false; // Reset flag on error
+  }
+}
+
+function ensureSequentialIntegrity(allPicks, newPicks) {
+  // Get the current highest overall pick we've synced
+  const syncedOveralls = Array.from(lastSyncedPicks).map(pickId => {
+    const overall = parseInt(pickId.split('-')[0]);
+    return isNaN(overall) ? 0 : overall;
+  });
+  
+  const maxSyncedOverall = syncedOveralls.length > 0 ? Math.max(...syncedOveralls) : 0;
+  const maxAvailableOverall = Math.max(...allPicks.map(p => p.overall));
+  
+  console.log(`Sequence check: maxSynced=${maxSyncedOverall}, maxAvailable=${maxAvailableOverall}`);
+  
+  // Check if there are gaps in the sequence
+  const expectedRange = Array.from({length: maxAvailableOverall}, (_, i) => i + 1);
+  const availableOveralls = allPicks.map(p => p.overall);
+  const missingPicks = expectedRange.filter(overall => !availableOveralls.includes(overall));
+  
+  // Check if we have new picks that come before our max synced pick (indicating gaps)
+  const hasGapsInSequence = newPicks.some(pick => pick.overall <= maxSyncedOverall);
+  const hasMissingPicks = missingPicks.length > 0 && maxAvailableOverall > 10; // Only worry about gaps if we have substantial draft data
+  
+  if (hasGapsInSequence || hasMissingPicks) {
+    console.log(`Gaps detected: hasGapsInSequence=${hasGapsInSequence}, missingPicks=${missingPicks.length}`);
+    return {
+      needsFullSync: true,
+      incrementalPicks: newPicks,
+      missingPicks: missingPicks
+    };
+  }
+  
+  // Filter to only truly new picks (after our max synced)
+  const trulyNewPicks = newPicks.filter(pick => pick.overall > maxSyncedOverall);
+  
+  return {
+    needsFullSync: false,
+    incrementalPicks: trulyNewPicks,
+    missingPicks: []
+  };
+}
+
+function performFullSyncWithGapFilling(allPicks) {
+  console.log('Performing full sync with gap filling to ensure draft completeness');
+  
+  // Check if extension context is still valid
+  if (!isExtensionContextValid()) {
+    console.log('Extension context invalidated, cannot perform full sync');
+    isCurrentlySyncing = false;
+    stopAutoSync();
+    return;
+  }
+  
+  // Send all picks as a complete sync to ensure no gaps
+  chrome.runtime.sendMessage({
+    type: 'full_sync_with_verification',
+    data: allPicks
+  }, (response) => {
+    isCurrentlySyncing = false;
+    
+    if (response && response.success) {
+      console.log('Full sync with gap filling successful:', response);
+      
+      // Update our synced picks set with all picks
+      lastSyncedPicks.clear();
+      allPicks.forEach(pick => {
+        const pickId = `${pick.overall}-${pick.player}-${pick.team}`;
+        lastSyncedPicks.add(pickId);
+      });
+      
+      showNotification(`Draft synchronized: ${allPicks.length} picks verified`, 'success');
+    } else {
+      console.error('Full sync with gap filling failed:', response?.error);
+      showNotification(`Sync failed: ${response?.error || 'Unknown error'}`, 'error');
+    }
+  });
+}
+
+function syncNewPicks(newPicks) {
+  if (isCurrentlySyncing) {
+    console.log('Sync already in progress, skipping...');
+    return;
+  }
+  
+  // Check if extension context is still valid
+  if (!isExtensionContextValid()) {
+    console.log('Extension context invalidated, cannot sync new picks');
+    isCurrentlySyncing = false;
+    stopAutoSync();
+    return;
+  }
+  
+  isCurrentlySyncing = true;
+  console.log('Syncing new picks:', newPicks);
+  
+  // Limit batch size to prevent UI freezing
+  const maxBatchSize = 10;
+  const picksToSync = newPicks.slice(0, maxBatchSize);
+  
+  if (newPicks.length > maxBatchSize) {
+    console.log(`Limiting sync to ${maxBatchSize} picks to prevent UI freeze. ${newPicks.length - maxBatchSize} picks will be synced in next batch.`);
+  }
+  
+  // Send incremental sync to background script
+  chrome.runtime.sendMessage({
+    type: 'incremental_sync',
+    data: picksToSync
+  }, (response) => {
+    isCurrentlySyncing = false; // Reset flag when done
+    
+    if (response && response.success) {
+      console.log('Incremental sync successful:', response);
+      
+      // Mark these picks as synced
+      picksToSync.forEach(pick => {
+        const pickId = `${pick.overall}-${pick.player}-${pick.team}`;
+        lastSyncedPicks.add(pickId);
+      });
+      
+      // Show subtle notification for new picks (limit frequency)
+      if (picksToSync.length <= 3) {
+        showNotification(`Synced ${picksToSync.length} new draft pick${picksToSync.length > 1 ? 's' : ''}`, 'success');
+      }
+      
+      // If there were more picks, schedule next batch
+      if (newPicks.length > maxBatchSize) {
+        setTimeout(() => {
+          const remainingPicks = newPicks.slice(maxBatchSize);
+          syncNewPicks(remainingPicks);
+        }, 2000); // Wait 2 seconds before next batch
+      }
+    } else {
+      console.error('Incremental sync failed:', response?.error);
+      showNotification(`Failed to sync picks: ${response?.error || 'Unknown error'}`, 'error');
+    }
+  });
 }
 
 function addSyncButton() {
@@ -88,14 +506,7 @@ function addSyncButton() {
     gap: 8px;
   `;
   
-  syncButton.innerHTML = `
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
-      <path d="M6 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
-      <path d="M13 12h3l-4 4-4-4h3"></path>
-    </svg>
-    Sync Draft Picks
-  `;
+  updateSyncButtonContent();
   
   // Add hover effects
   syncButton.addEventListener('mouseenter', () => {
@@ -108,8 +519,12 @@ function addSyncButton() {
     syncButton.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
   });
   
-  // Add click handler
-  syncButton.addEventListener('click', handleManualSync);
+  // Add click handler with right-click for auto-sync toggle
+  syncButton.addEventListener('click', handleSyncButtonClick);
+  syncButton.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    toggleAutoSync();
+  });
   
   // Add the button to the page
   document.body.appendChild(syncButton);
@@ -158,6 +573,13 @@ function addInlineButton() {
 
 function handleManualSync() {
   console.log('Manual sync triggered');
+  
+  // Check if extension context is still valid
+  if (!isExtensionContextValid()) {
+    console.log('Extension context invalidated, cannot perform manual sync');
+    showNotification('Extension context invalidated. Please reload the page.', 'error');
+    return;
+  }
   
   // Update button state to show loading
   const originalContent = syncButton.innerHTML;
@@ -213,9 +635,59 @@ function handleManualSync() {
   }
 }
 
+function updateSyncButtonContent() {
+  if (!syncButton) return;
+  
+  const isAutoSyncActive = autoSyncEnabled && isDraftResultsTabActive();
+  const autoSyncStatus = isAutoSyncActive ? 'ON' : 'OFF';
+  const statusColor = isAutoSyncActive ? '#10b981' : '#6b7280';
+  
+  syncButton.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+      <path d="M6 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+      <path d="M13 12h3l-4 4-4-4h3"></path>
+    </svg>
+    <div style="display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2;">
+      <span>Sync Draft Picks</span>
+      <span style="font-size: 10px; color: ${statusColor}; font-weight: 500;">Auto: ${autoSyncStatus}</span>
+    </div>
+  `;
+}
+
+function handleSyncButtonClick() {
+  if (isDraftResultsTabActive()) {
+    // If on draft results tab, perform verification sync to ensure completeness
+    console.log('Performing verification sync from button click');
+    const allPicks = parseDraftPicks();
+    if (allPicks.length > 0) {
+      performFullSyncWithGapFilling(allPicks);
+    } else {
+      showNotification('No draft picks found to sync', 'warning');
+    }
+  } else {
+    // If not on draft results tab, do full manual sync
+    handleManualSync();
+  }
+}
+
+function toggleAutoSync() {
+  autoSyncEnabled = !autoSyncEnabled;
+  console.log('Auto-sync toggled:', autoSyncEnabled ? 'enabled' : 'disabled');
+  
+  if (autoSyncEnabled && isDraftResultsTabActive()) {
+    startAutoSync();
+  } else {
+    stopAutoSync();
+  }
+  
+  updateSyncButtonContent();
+  showNotification(`Auto-sync ${autoSyncEnabled ? 'enabled' : 'disabled'}`, 'success');
+}
+
 function resetSyncButton(originalContent) {
   syncButton.style.background = 'linear-gradient(135deg, #4f46e5, #7c3aed)';
-  syncButton.innerHTML = originalContent;
+  updateSyncButtonContent();
 }
 
 function parseDraftPicks() {
@@ -297,6 +769,42 @@ function parseResultsByRoundTable(table) {
   const tbody = table.querySelector('tbody');
   const rows = tbody ? tbody.querySelectorAll('tr') : table.querySelectorAll('tr');
   console.log(`Found ${rows.length} rows in results-by-round table`);
+  
+  // Try to detect number of teams from the draft structure
+  // Look at first round picks to determine league size
+  let detectedTeams = 12; // Default
+  const firstRoundPicks = [];
+  
+  // First pass: collect pick numbers to detect league size
+  rows.forEach((row) => {
+    const cells = row.querySelectorAll('td');
+    if (cells.length < 3) return;
+    
+    const pickCell = row.querySelector('td.Ta-c') || cells[0];
+    if (pickCell) {
+      const pickText = pickCell.textContent?.trim();
+      if (pickText && /^\d+$/.test(pickText)) {
+        const pickNum = parseInt(pickText);
+        if (pickNum >= 1 && pickNum <= 20) { // First round picks
+          firstRoundPicks.push(pickNum);
+        }
+      }
+    }
+  });
+  
+  // Determine league size from first round picks
+  if (firstRoundPicks.length > 0) {
+    const maxFirstRound = Math.max(...firstRoundPicks);
+    if (maxFirstRound === 8) detectedTeams = 8;
+    else if (maxFirstRound === 10) detectedTeams = 10;
+    else if (maxFirstRound === 12) detectedTeams = 12;
+    else if (maxFirstRound === 14) detectedTeams = 14;
+    else if (maxFirstRound === 16) detectedTeams = 16;
+    else if (maxFirstRound === 18) detectedTeams = 18;
+    else if (maxFirstRound === 20) detectedTeams = 20;
+  }
+  
+  console.log(`Detected ${detectedTeams} teams from first round picks:`, firstRoundPicks);
   
   // Log table structure for debugging
   console.log('Table structure:');
@@ -444,10 +952,10 @@ function parseResultsByRoundTable(table) {
         return;
       }
       
-      // Calculate round and pick
+      // Calculate round and pick using detected team count
       const overall = pickNumber;
-      const round = Math.ceil(overall / 12);
-      const pick = ((overall - 1) % 12) + 1;
+      const round = Math.ceil(overall / detectedTeams);
+      const pick = ((overall - 1) % detectedTeams) + 1;
       
       // Use fallback if we didn't get clean data from ys-player cell parsing
       if (!cleanPlayerName) {
@@ -526,6 +1034,38 @@ function parseGenericDraftTable(rows) {
   const picks = [];
   console.log('Parsing generic draft table...');
   
+  // Detect league size from first round picks
+  let detectedTeams = 12; // Default
+  const firstRoundPicks = [];
+  
+  rows.forEach((row) => {
+    const cells = row.querySelectorAll('td');
+    if (cells.length < 3) return;
+    
+    const cellTexts = Array.from(cells).map(cell => cell.textContent?.trim() || '');
+    const pickNumber = cellTexts.find(text => /^\d+$/.test(text) && parseInt(text) <= 400);
+    
+    if (pickNumber) {
+      const pickNum = parseInt(pickNumber);
+      if (pickNum >= 1 && pickNum <= 20) { // First round picks
+        firstRoundPicks.push(pickNum);
+      }
+    }
+  });
+  
+  if (firstRoundPicks.length > 0) {
+    const maxFirstRound = Math.max(...firstRoundPicks);
+    if (maxFirstRound === 8) detectedTeams = 8;
+    else if (maxFirstRound === 10) detectedTeams = 10;
+    else if (maxFirstRound === 12) detectedTeams = 12;
+    else if (maxFirstRound === 14) detectedTeams = 14;
+    else if (maxFirstRound === 16) detectedTeams = 16;
+    else if (maxFirstRound === 18) detectedTeams = 18;
+    else if (maxFirstRound === 20) detectedTeams = 20;
+  }
+  
+  console.log(`Detected ${detectedTeams} teams from generic table first round picks:`, firstRoundPicks);
+  
   // This is the fallback parsing logic (simplified version of original)
   rows.forEach((row, index) => {
     try {
@@ -542,8 +1082,9 @@ function parseGenericDraftTable(rows) {
       
       if (pickNumber && playerText && teamText) {
         const overall = parseInt(pickNumber);
-        const round = Math.ceil(overall / 12);
-        const pick = ((overall - 1) % 12) + 1;
+        
+        const round = Math.ceil(overall / detectedTeams);
+        const pick = ((overall - 1) % detectedTeams) + 1;
         
         const mappedTeam = teamMapping[teamText] || teamText;
         
@@ -570,6 +1111,13 @@ function parseGenericDraftTable(rows) {
 
 function sendDraftPick(pickData, callback) {
   console.log('Sending draft pick:', pickData);
+  
+  // Check if extension context is still valid
+  if (!isExtensionContextValid()) {
+    console.log('Extension context invalidated, cannot send draft pick');
+    if (callback) callback(false);
+    return;
+  }
   
   chrome.runtime.sendMessage({
     type: 'draft_pick',
@@ -652,18 +1200,49 @@ function showNotification(message, type = 'success') {
   }, 4000);
 }
 
-// Listen for page navigation
+// Listen for page navigation and tab changes
 let currentUrl = window.location.href;
-setInterval(() => {
-  if (window.location.href !== currentUrl) {
+let lastDraftResultsState = isDraftResultsTabActive();
+
+function handlePageOrTabChange() {
+  const urlChanged = window.location.href !== currentUrl;
+  const draftResultsStateChanged = isDraftResultsTabActive() !== lastDraftResultsState;
+  
+  if (urlChanged) {
     currentUrl = window.location.href;
     console.log('Page changed:', currentUrl);
+  }
+  
+  if (draftResultsStateChanged) {
+    lastDraftResultsState = isDraftResultsTabActive();
+    console.log('Draft Results tab state changed:', lastDraftResultsState);
     
+    // Update button content to reflect current state
+    updateSyncButtonContent();
+    
+    if (lastDraftResultsState && autoSyncEnabled) {
+      console.log('Switched to Draft Results tab - starting auto-sync');
+      startAutoSync();
+    } else {
+      console.log('Left Draft Results tab - stopping auto-sync');
+      stopAutoSync();
+    }
+  }
+  
+  if (urlChanged) {
     if (isDraftPage() && !syncButton) {
-      setTimeout(addSyncButton, 1000);
+      setTimeout(() => {
+        addSyncButton();
+        if (isDraftResultsTabActive() && autoSyncEnabled) {
+          startAutoSync();
+        }
+      }, 1000);
     } else if (!isDraftPage() && syncButton) {
+      stopAutoSync();
       syncButton.remove();
       syncButton = null;
     }
   }
-}, 1000);
+}
+
+setInterval(handlePageOrTabChange, 1000);

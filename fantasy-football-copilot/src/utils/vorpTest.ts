@@ -86,7 +86,6 @@ const mockUserTeam: Team = {
 };
 
 const mockSettings: DraftSettings = {
-  leagueName: 'Test League',
   scoringType: 'PPR',
   numberOfTeams: 12,
   draftSlot: 5,
@@ -99,8 +98,7 @@ const mockSettings: DraftSettings = {
     TE: 1,
     FLEX: 1,
     K: 1,
-    DEF: 1,
-    BENCH: 7
+    DEF: 1
   },
   teamNames: ['Team 1', 'Team 2', 'Team 3', 'Team 4', 'My Team', 'Team 6', 'Team 7', 'Team 8', 'Team 9', 'Team 10', 'Team 11', 'Team 12']
 };

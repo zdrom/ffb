@@ -22,7 +22,25 @@ export class VORPOnlyRecommendationsEngine {
   }
 
   getRecommendations(limit: number = 10): Recommendation[] {
-    const availablePlayers = this.players.filter(p => !p.isDrafted && !p.isDoNotDraft);
+    // Double-check that we're filtering out drafted players properly
+    const availablePlayers = this.players.filter(p => {
+      // Strict checking for drafted status
+      const isDrafted = p.isDrafted === true || p.draftedBy !== undefined;
+      const isDoNotDraft = p.isDoNotDraft === true;
+      
+      if (isDrafted && process.env.NODE_ENV === 'development') {
+        console.log(`Filtering out drafted player: ${p.name} (isDrafted: ${p.isDrafted}, draftedBy: ${p.draftedBy})`);
+      }
+      
+      return !isDrafted && !isDoNotDraft;
+    });
+    
+    if (availablePlayers.length === 0) {
+      console.warn('No available players found for recommendations');
+      return [];
+    }
+    
+    console.log(`Found ${availablePlayers.length} available players for VORP recommendations`);
     
     const scoredPlayers = availablePlayers.map(player => ({
       player,

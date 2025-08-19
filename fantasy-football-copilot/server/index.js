@@ -113,6 +113,213 @@ app.post('/api/draft-pick', (req, res) => {
   }
 });
 
+// New endpoint for incremental sync - adds only new picks
+app.post('/api/draft-incremental', (req, res) => {
+  try {
+    const { picks } = req.body;
+    
+    if (!Array.isArray(picks)) {
+      return res.status(400).json({
+        error: 'picks must be an array'
+      });
+    }
+
+    if (picks.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No new picks to sync',
+        data: { picks: [], total: 0 }
+      });
+    }
+
+    const processedPicks = [];
+    let addedCount = 0;
+    let skippedCount = 0;
+    
+    for (const [index, pick] of picks.entries()) {
+      if (!pick.player || !pick.team) {
+        console.warn(`Pick ${index + 1} missing required fields: player and team`);
+        skippedCount++;
+        continue;
+      }
+      
+      // Check if this pick already exists (by overall pick number or by player name)
+      const existingPick = draftPicks.find(existing => 
+        existing.overall === (pick.overall || index + 1) ||
+        (existing.player?.toLowerCase() === pick.player?.toLowerCase() && existing.overall === (pick.overall || index + 1))
+      );
+      
+      if (existingPick) {
+        console.log(`Pick already exists: ${pick.player} at overall ${pick.overall || index + 1}`);
+        skippedCount++;
+        continue;
+      }
+      
+      const pickData = {
+        player: pick.player,
+        team: pick.team,
+        round: pick.round || Math.ceil((pick.overall || index + 1) / 12),
+        pick: pick.pick || (((pick.overall || index + 1) - 1) % 12) + 1,
+        overall: pick.overall || index + 1,
+        position: pick.position || '',
+        nflTeam: pick.nflTeam || '',
+        timestamp: new Date().toISOString(),
+        id: Date.now() + Math.random() + index
+      };
+      
+      processedPicks.push(pickData);
+      addedCount++;
+    }
+
+    // Add new picks to the existing picks
+    draftPicks.push(...processedPicks);
+    
+    // Sort picks by overall pick number
+    draftPicks.sort((a, b) => a.overall - b.overall);
+
+    // Broadcast incremental sync event
+    const syncMessage = {
+      type: 'draft_incremental',
+      data: {
+        newPicks: processedPicks,
+        addedCount,
+        skippedCount,
+        totalPicks: draftPicks.length
+      }
+    };
+    
+    broadcast(syncMessage);
+
+    console.log(`Incremental sync completed: ${addedCount} new picks added, ${skippedCount} skipped`);
+
+    res.json({
+      success: true,
+      message: `Incremental sync completed: ${addedCount} new picks added, ${skippedCount} skipped`,
+      data: {
+        newPicks: processedPicks,
+        addedCount,
+        skippedCount,
+        totalPicks: draftPicks.length
+      }
+    });
+  } catch (error) {
+    console.error('Error processing incremental sync:', error);
+    res.status(500).json({
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
+// New endpoint for sync with verification - ensures no gaps in draft sequence
+app.post('/api/draft-sync-verify', (req, res) => {
+  try {
+    const { picks } = req.body;
+    
+    if (!Array.isArray(picks)) {
+      return res.status(400).json({
+        error: 'picks must be an array'
+      });
+    }
+
+    if (picks.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No picks to sync',
+        data: { picks: [], total: 0, gaps: [], verified: true }
+      });
+    }
+
+    // Sort picks by overall pick number
+    const sortedPicks = [...picks].sort((a, b) => (a.overall || 0) - (b.overall || 0));
+    
+    // Detect gaps in the sequence
+    const overalls = sortedPicks.map(p => p.overall || 0).filter(o => o > 0);
+    const maxOverall = Math.max(...overalls);
+    const expectedRange = Array.from({length: maxOverall}, (_, i) => i + 1);
+    const gaps = expectedRange.filter(overall => !overalls.includes(overall));
+    
+    console.log(`Sync verification: ${picks.length} picks, max overall: ${maxOverall}, gaps: ${gaps.length}`);
+    
+    if (gaps.length > 0) {
+      console.warn(`Draft sequence gaps detected: ${gaps.join(', ')}`);
+    }
+
+    const processedPicks = [];
+    let addedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    
+    // Clear existing picks and rebuild from complete data
+    const existingPicksCount = draftPicks.length;
+    draftPicks.length = 0;
+    
+    for (const [index, pick] of sortedPicks.entries()) {
+      if (!pick.player || !pick.team) {
+        console.warn(`Pick ${index + 1} missing required fields: player and team`);
+        skippedCount++;
+        continue;
+      }
+      
+      const pickData = {
+        player: pick.player,
+        team: pick.team,
+        round: pick.round || Math.ceil((pick.overall || index + 1) / 12),
+        pick: pick.pick || (((pick.overall || index + 1) - 1) % 12) + 1,
+        overall: pick.overall || index + 1,
+        position: pick.position || '',
+        nflTeam: pick.nflTeam || '',
+        timestamp: new Date().toISOString(),
+        id: Date.now() + Math.random() + index
+      };
+      
+      processedPicks.push(pickData);
+      addedCount++;
+    }
+
+    // Store all verified picks
+    draftPicks.push(...processedPicks);
+
+    // Broadcast sync verification event
+    const syncMessage = {
+      type: 'draft_sync_verify',
+      data: {
+        picks: processedPicks,
+        addedCount,
+        updatedCount,
+        skippedCount,
+        gaps,
+        totalPicks: draftPicks.length,
+        verified: gaps.length === 0,
+        previousCount: existingPicksCount
+      }
+    };
+    
+    broadcast(syncMessage);
+
+    console.log(`Draft sync verification completed: ${addedCount} picks processed, ${gaps.length} gaps detected`);
+
+    res.json({
+      success: true,
+      message: `Draft sync verification completed: ${addedCount} picks processed${gaps.length > 0 ? `, ${gaps.length} gaps detected` : ', no gaps found'}`,
+      data: {
+        picks: processedPicks,
+        addedCount,
+        updatedCount,
+        skippedCount,
+        gaps,
+        totalPicks: draftPicks.length,
+        verified: gaps.length === 0,
+        previousCount: existingPicksCount
+      }
+    });
+  } catch (error) {
+    console.error('Error processing draft sync verification:', error);
+    res.status(500).json({
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
 // New endpoint for bulk sync - replaces all draft picks
 app.post('/api/draft-sync', (req, res) => {
   try {

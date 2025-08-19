@@ -28,11 +28,30 @@ export class DynamicVORPEngine implements DynamicVORPCalculator {
   }
 
   calculateDynamicVORP(player: Player): number {
-    // Safety check for valid position
+    // Convert DST to DEF for legacy compatibility
+    if (player.position === 'DST' as any) {
+      player.position = 'DEF';
+    }
+    
+    // Safety check for valid position - normalize common variants
     const validPositions: Position[] = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
-    if (!validPositions.includes(player.position)) {
-      console.warn(`Invalid position for player ${player.name}: ${player.position}`);
-      return 0;
+    let normalizedPosition = player.position;
+    
+    // Handle common position variants and malformed data
+    if ((player.position as any) === 'DST') {
+      normalizedPosition = 'DEF';
+    } else if ((player.position as any) === 'II' || (player.position as any) === 'IR') {
+      // These might be roster designation suffixes, try to infer from player name or default to RB
+      console.warn(`Invalid position '${player.position}' for player ${player.name}, defaulting to RB`);
+      normalizedPosition = 'RB';
+    } else if (!validPositions.includes(player.position)) {
+      console.warn(`Invalid position for player ${player.name}: ${player.position}, defaulting to RB`);
+      normalizedPosition = 'RB';
+    }
+    
+    // Update player position if it was normalized
+    if (normalizedPosition !== player.position) {
+      player.position = normalizedPosition;
     }
 
     // Safety check for projectedPoints
