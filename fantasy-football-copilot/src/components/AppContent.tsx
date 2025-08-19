@@ -8,12 +8,13 @@ import DraftSettings from './draft/DraftSettings';
 import PlayerImport from './players/PlayerImport';
 import GlobalVORPSettings from './settings/GlobalVORPSettings';
 import { DraftHistory } from './draft/DraftHistory';
+import TeamRosterGrid from './draft/TeamRosterGrid';
 
 type SetupStep = 'settings' | 'vorp-settings' | 'import' | 'draft';
 
 const AppContent = () => {
   const { state, dispatch } = useDraft();
-  const { isConnected, connectionStatus } = useWebSocket();
+  const { isConnected, connectionStatus, isSyncProcessing } = useWebSocket();
   const [currentStep, setCurrentStep] = useState<SetupStep>('settings');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -40,11 +41,19 @@ const AppContent = () => {
         {/* Connection Status */}
         <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-md">
           <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <div className={`h-3 w-3 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'} ${isConnected ? 'animate-pulse' : ''}`}></div>
-              <span className="text-sm font-medium text-gray-900">
-                Chrome Extension: {connectionStatus}
-              </span>
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center">
+                <div className={`h-3 w-3 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'} ${isConnected ? 'animate-pulse' : ''}`}></div>
+                <span className="text-sm font-medium text-gray-900">
+                  Chrome Extension: {connectionStatus}
+                </span>
+              </div>
+              {isSyncProcessing && (
+                <div className="flex items-center">
+                  <div className="h-3 w-3 rounded-full mr-2 bg-blue-500 animate-spin"></div>
+                  <span className="text-sm font-medium text-blue-600">Auto-syncing...</span>
+                </div>
+              )}
             </div>
             <span className="text-xs text-gray-500">
               {isConnected ? 'Ready to sync Yahoo draft picks' : 'Install Chrome extension for Yahoo sync'}
@@ -404,10 +413,12 @@ const AppContent = () => {
               </div>
             </div>
 
-            {/* Team Draft Counts */}
+            {/* Enhanced Position Analysis */}
             <div className="bg-white rounded-lg shadow p-4">
-              <h3 className="text-lg font-bold text-gray-900 mb-3">Team Draft Counts by Position</h3>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <h3 className="text-lg font-bold text-gray-900 mb-3">📊 Position Analysis</h3>
+              
+              {/* Position Scarcity Overview */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 {['QB', 'RB', 'WR', 'TE'].map(position => {
                   const counts = Array.from({ length: (state.settings.rosterSlots[position as keyof typeof state.settings.rosterSlots] || 0) + 1 }, (_, i) => {
                     const teamsWithCount = state.teams.filter(team => 
@@ -415,10 +426,28 @@ const AppContent = () => {
                     ).length;
                     return { count: i, teams: teamsWithCount };
                   });
+
+                  // Calculate average players drafted per team for this position
+                  const totalDrafted = state.teams.reduce((sum, team) => 
+                    sum + (team.roster[position as keyof typeof team.roster]?.length || 0), 0
+                  );
+                  const avgPerTeam = totalDrafted / state.teams.length;
+                  const maxSlots = state.settings.rosterSlots[position as keyof typeof state.settings.rosterSlots] || 0;
+                  const scarcityPercent = Math.round((avgPerTeam / maxSlots) * 100);
                   
                   return (
                     <div key={position} className="border rounded p-3">
-                      <h4 className="font-semibold text-gray-800 mb-2">{position}</h4>
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-semibold text-gray-800">{position}</h4>
+                        <span className={`px-2 py-1 rounded text-xs font-bold ${
+                          scarcityPercent > 75 ? 'bg-red-100 text-red-700' :
+                          scarcityPercent > 50 ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-green-100 text-green-700'
+                        }`}>
+                          {scarcityPercent}% filled
+                        </span>
+                      </div>
+                      
                       <div className="space-y-1">
                         {counts.map(({ count, teams }) => (
                           <div key={count} className="flex justify-between text-sm">
@@ -427,10 +456,70 @@ const AppContent = () => {
                           </div>
                         ))}
                       </div>
+                      
+                      <div className="mt-2 pt-2 border-t text-xs text-gray-600">
+                        Avg: {avgPerTeam.toFixed(1)} / {maxSlots} per team
+                      </div>
                     </div>
                   );
                 })}
               </div>
+
+              {/* My Team Breakdown */}
+              {(() => {
+                const myTeam = state.teams.find(t => t.isUser);
+                if (!myTeam) return null;
+
+                return (
+                  <div className="border-2 border-blue-200 rounded-lg p-4 bg-blue-50">
+                    <h4 className="font-bold text-blue-900 mb-3 flex items-center">
+                      <span className="mr-2">👤</span>
+                      My Team: {myTeam.name}
+                    </h4>
+                    
+                    <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                      {['QB', 'RB', 'WR', 'TE', 'K', 'DEF'].map(position => {
+                        const players = myTeam.roster[position as keyof typeof myTeam.roster] || [];
+                        const maxSlots = state.settings.rosterSlots[position as keyof typeof state.settings.rosterSlots] || 0;
+                        const slotsLeft = maxSlots - players.length;
+                        
+                        return (
+                          <div key={position} className="text-center">
+                            <div className="font-semibold text-gray-800 text-sm mb-1">{position}</div>
+                            <div className="text-xs text-gray-600 mb-2">{players.length}/{maxSlots}</div>
+                            
+                            {players.map((player, idx) => (
+                              <div key={idx} className="bg-white px-2 py-1 rounded mb-1 text-xs font-medium truncate" title={player.name}>
+                                {player.name.length > 10 ? `${player.name.substring(0, 10)}...` : player.name}
+                              </div>
+                            ))}
+                            
+                            {Array.from({ length: slotsLeft }).map((_, idx) => (
+                              <div key={`empty-${idx}`} className="bg-gray-200 px-2 py-1 rounded mb-1 text-xs text-gray-500 border-dashed border">
+                                Empty
+                              </div>
+                            ))}
+                            
+                            {slotsLeft > 0 && (
+                              <div className={`text-xs font-bold mt-1 ${
+                                slotsLeft > 2 ? 'text-red-600' : 
+                                slotsLeft > 1 ? 'text-yellow-600' : 'text-green-600'
+                              }`}>
+                                Need {slotsLeft}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Full Team Roster Grid */}
+            <div className="mt-4">
+              <TeamRosterGrid />
             </div>
           </div>
         )}

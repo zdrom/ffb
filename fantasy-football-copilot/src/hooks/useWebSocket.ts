@@ -154,27 +154,27 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
   };
 
   const handleIncrementalSync = async (incrementalData: any) => {
-    console.log('Processing incremental sync from extension:', incrementalData);
+    console.log('🔄 Processing incremental sync from extension:', incrementalData);
     
     if (!incrementalData.newPicks || !Array.isArray(incrementalData.newPicks)) {
-      console.error('Invalid incremental sync data format');
+      console.error('❌ Invalid incremental sync data format');
       return;
     }
 
     if (incrementalData.newPicks.length === 0) {
-      console.log('No new picks to sync');
+      console.log('ℹ️ No new picks to sync');
       return;
     }
 
     // Auto-load players if needed
     const players = ensureVORPPlayersLoadedFn();
     if (!players || players.length === 0) {
-      console.warn('No VORP rankings available for incremental sync');
+      console.warn('⚠️ No VORP rankings available for incremental sync');
       return;
     }
 
     const totalPicks = incrementalData.newPicks.length;
-    console.log(`Incrementally syncing ${totalPicks} new picks using worker...`);
+    console.log(`🔄 Incrementally syncing ${totalPicks} new picks using worker...`);
     
     // Convert to worker format
     const picks = incrementalData.newPicks.map((pickData: any) => ({
@@ -186,9 +186,12 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
     try {
       // Use worker-based incremental sync
       await processIncrementalSync(picks);
-      console.log(`Worker-based incremental sync completed: ${incrementalData.addedCount} added, ${incrementalData.skippedCount} skipped`);
+      console.log(`✅ Worker-based incremental sync completed: ${incrementalData.addedCount} added, ${incrementalData.skippedCount} skipped`);
+      
+      // Force a UI update notification
+      console.log('🎯 UI should now reflect the new draft picks automatically');
     } catch (error) {
-      console.error('Error during worker-based incremental sync:', error);
+      console.error('❌ Error during worker-based incremental sync:', error);
     }
   };
 

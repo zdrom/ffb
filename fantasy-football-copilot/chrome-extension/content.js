@@ -396,20 +396,20 @@ function performFullSyncWithGapFilling(allPicks) {
 
 function syncNewPicks(newPicks) {
   if (isCurrentlySyncing) {
-    console.log('Sync already in progress, skipping...');
+    console.log('🔄 Sync already in progress, skipping...');
     return;
   }
   
   // Check if extension context is still valid
   if (!isExtensionContextValid()) {
-    console.log('Extension context invalidated, cannot sync new picks');
+    console.log('❌ Extension context invalidated, cannot sync new picks');
     isCurrentlySyncing = false;
     stopAutoSync();
     return;
   }
   
   isCurrentlySyncing = true;
-  console.log('Syncing new picks:', newPicks);
+  console.log('🔄 Auto-syncing new picks to Fantasy Football Copilot:', newPicks);
   
   // Limit batch size to prevent UI freezing
   const maxBatchSize = 10;
@@ -427,7 +427,7 @@ function syncNewPicks(newPicks) {
     isCurrentlySyncing = false; // Reset flag when done
     
     if (response && response.success) {
-      console.log('Incremental sync successful:', response);
+      console.log('✅ Incremental auto-sync successful:', response);
       
       // Mark these picks as synced
       picksToSync.forEach(pick => {
@@ -437,7 +437,9 @@ function syncNewPicks(newPicks) {
       
       // Show subtle notification for new picks (limit frequency)
       if (picksToSync.length <= 3) {
-        showNotification(`Synced ${picksToSync.length} new draft pick${picksToSync.length > 1 ? 's' : ''}`, 'success');
+        showNotification(`🔄 Auto-synced ${picksToSync.length} new pick${picksToSync.length > 1 ? 's' : ''} to Copilot`, 'success');
+      } else {
+        showNotification(`🔄 Auto-synced ${picksToSync.length} picks to Copilot`, 'success');
       }
       
       // If there were more picks, schedule next batch
