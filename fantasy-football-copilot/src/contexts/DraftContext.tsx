@@ -476,18 +476,26 @@ function handleIncrementalSyncPicks(state: DraftState, payload: { picks: { playe
       picksUntilMyTurn: calculatePicksUntilMyTurn(newCurrentPick, newState.settings.draftSlot, newState.settings.numberOfTeams, newState.settings.draftType)
     };
 
-    // Use optimized incremental VORP recalculation
-    const newPickPlayerIds = newPicks.map(pick => pick.player?.id).filter(Boolean) as string[];
+    // DEBUG: Let's trace exactly what's happening with player state
+    console.log('🐛 DEBUGGING INCREMENTAL SYNC STATE:');
+    console.log(`- Total players: ${baseState.players.length}`);
+    console.log(`- Drafted players: ${baseState.players.filter(p => p.isDrafted).length}`);
+    console.log(`- New picks added: ${newPicks.length}`);
+    console.log(`- Total picks in state: ${baseState.picks.length}`);
     
-    if (newPicks.length <= 5) {
-      // For small updates, use incremental VORP recalculation (only affected positions)
-      return recalculateIncrementalVORP(baseState, newPickPlayerIds);
-    } else {
-      // For larger updates, skip VORP recalculation to prevent UI freeze
-      // VORP will be recalculated on next manual interaction
-      console.log(`Skipping VORP recalculation for large incremental sync (${newPicks.length} picks) to prevent UI freeze`);
-      return baseState;
-    }
+    // Log some sample VORP values before recalculation
+    const samplePlayers = baseState.players.filter(p => !p.isDrafted).slice(0, 5);
+    console.log('🐛 Sample undrafted player VORP values BEFORE recalc:', samplePlayers.map(p => `${p.name}: ${p.vorp || 'undefined'}`));
+    
+    // CRITICAL FIX: Always use full VORP recalculation for incremental sync to ensure consistency
+    const finalState = recalculateAllVORP(baseState);
+    
+    // Log sample VORP values after recalculation
+    const samplePlayersAfter = finalState.players.filter(p => !p.isDrafted).slice(0, 5);
+    console.log('🐛 Sample undrafted player VORP values AFTER recalc:', samplePlayersAfter.map(p => `${p.name}: ${p.vorp || 'undefined'}`));
+    console.log(`🐛 Post-recalc drafted players: ${finalState.players.filter(p => p.isDrafted).length}`);
+    
+    return finalState;
   } catch (error) {
     console.error('Error in handleIncrementalSyncPicks:', error);
     return state;

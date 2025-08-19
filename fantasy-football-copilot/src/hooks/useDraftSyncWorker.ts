@@ -22,6 +22,12 @@ interface UseDraftSyncWorkerResult {
 
 export function useDraftSyncWorker(): UseDraftSyncWorkerResult {
   const { state, dispatch } = useDraft();
+  const stateRef = useRef(state);
+  
+  // Keep state ref updated to prevent stale closures
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   const workerRef = useRef<Worker | null>(null);
   const isProcessingRef = useRef(false);
   const progressCallbackRef = useRef<((progress: SyncProgress) => void) | null>(null);
@@ -145,41 +151,51 @@ export function useDraftSyncWorker(): UseDraftSyncWorkerResult {
     isProcessingRef.current = true;
     progressCallbackRef.current = onProgress || null;
 
+    // Use current state ref to avoid stale closures
+    const currentState = stateRef.current;
+    console.log(`🐛 BATCH WORKER - Using current state: ${currentState.players.length} players`);
+
     workerRef.current.postMessage({
       type: 'PROCESS_BATCH',
       payload: {
         picks,
-        players: state.players,
-        teams: state.teams,
-        settings: state.settings,
+        players: currentState.players,
+        teams: currentState.teams,
+        settings: currentState.settings,
         playerMappings: loadPlayerNameMappings()
       }
     });
-  }, [state.players, state.teams, state.settings]);
+  }, []);
 
   const processIncrementalSync = useCallback(async (picks: PickData[], customPlayers?: any[]): Promise<void> => {
     if (isProcessingRef.current || !workerRef.current) {
-      console.warn('Worker is busy or not available, falling back to main thread');
+      console.warn('🐛 Worker is busy or not available, falling back to main thread');
       return fallbackIncrementalSync(picks);
     }
 
     isProcessingRef.current = true;
 
-    // Use custom players if provided, otherwise fall back to state
-    const playersToUse = customPlayers || state.players;
-    console.log(`🔧 Worker using ${playersToUse.length} players (${customPlayers ? 'custom' : 'from state'})`);
+    // CRITICAL FIX: Use current state ref to avoid stale closures
+    const currentState = stateRef.current;
+    
+    // Use custom players if provided, otherwise fall back to current state
+    const playersToUse = customPlayers || currentState.players;
+    console.log(`🐛 SYNC WORKER DEBUG (FIXED):`);
+    console.log(`- Worker using ${playersToUse.length} players (${customPlayers ? 'custom' : 'from current state'})`);
+    console.log(`- Drafted players being sent to worker: ${playersToUse.filter(p => p.isDrafted).length}`);
+    console.log(`- Sample VORP values being sent:`, playersToUse.filter(p => !p.isDrafted).slice(0, 3).map(p => `${p.name}: ${p.vorp || 'undefined'}`));
 
     workerRef.current.postMessage({
       type: 'PROCESS_INCREMENTAL',
       payload: {
         picks,
         players: playersToUse,
-        teams: state.teams,
-        settings: state.settings,
+        teams: currentState.teams,
+        settings: currentState.settings,
         playerMappings: loadPlayerNameMappings()
       }
     });
-  }, [state.players, state.teams, state.settings]);
+  }, []);
 
   // Fallback methods for when worker is not available
   const fallbackBatchSync = async (picks: PickData[], onProgress?: (progress: SyncProgress) => void) => {

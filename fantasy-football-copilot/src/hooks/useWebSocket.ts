@@ -6,7 +6,14 @@ import { usePlayerMapping } from '../contexts/PlayerMappingContext';
 import { findPlayerWithMapping, trackUnmappedFailure } from '../utils/playerNameMapping';
 
 export const useWebSocket = (url: string = 'ws://localhost:3001') => {
+  console.log('🔥 WebSocket hook loaded - NEW VERSION with stale closure fix');
   const { state, dispatch } = useDraft();
+  const stateRef = useRef(state);
+  
+  // Keep state ref updated
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   const { processBatchSync, processIncrementalSync, isProcessing } = useDraftSyncWorker();
   const { showMappingPopup } = usePlayerMapping();
   const [isConnected, setIsConnected] = useState(false);
@@ -14,25 +21,24 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper function to ensure VORP players are loaded
-  const ensureVORPPlayersLoadedFn = () => {
-    console.log(`🔍 Checking player state: ${state.players.length} players loaded, ${state.picks.length} picks made`);
-    
-    if (state.players.length === 0) {
+  // Helper function to ensure VORP players are loaded for individual pick handling
+  const ensureVORPPlayersLoadedForPick = () => {
+    const currentState = stateRef.current;
+    if (currentState.players.length === 0) {
       console.log('⚠️ No players loaded, attempting to load from global VORP rankings...');
       const globalVORPData = loadGlobalVORPRankings();
       if (globalVORPData && globalVORPData.players.length > 0) {
         console.log(`🚀 Auto-loading ${globalVORPData.players.length} VORP rankings for draft sync`);
         dispatch({ type: 'LOAD_PLAYERS', payload: globalVORPData.players });
-        return globalVORPData.players; // Return the actual players data
+        return globalVORPData.players;
       } else {
         console.error('❌ No global VORP rankings found in storage');
         return null;
       }
     }
     
-    console.log(`✅ Using existing ${state.players.length} players (${state.players.filter(p => p.isDrafted).length} drafted)`);
-    return state.players; // Return existing players
+    console.log(`✅ Using existing ${currentState.players.length} players (${currentState.players.filter(p => p.isDrafted).length} drafted)`);
+    return currentState.players;
   };
 
   const connect = () => {
@@ -126,7 +132,7 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
   const handleDraftPick = async (pickData: any) => {
     console.log('Processing draft pick from extension:', pickData);
     
-    const players = ensureVORPPlayersLoadedFn();
+    const players = ensureVORPPlayersLoadedForPick();
     if (!players || players.length === 0) {
       alert('Please import your VORP rankings first before syncing draft picks.');
       return;
@@ -170,31 +176,28 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
       return;
     }
 
-    // Auto-load players if needed, but also ensure we have current draft state
-    let players = ensureVORPPlayersLoadedFn();
-    if (!players || players.length === 0) {
-      console.warn('⚠️ No VORP rankings available for incremental sync');
-      return;
-    }
+    // CRITICAL FIX: Use current state ref instead of stale state
+    const currentState = stateRef.current;
+    console.log(`🐛 INCREMENTAL SYNC - Checking current state: ${currentState.players.length} players, ${currentState.picks.length} picks`);
     
-    // CRITICAL: Merge with current picks to maintain draft state
-    if (state.picks.length > 0) {
-      console.log(`🔧 Merging fresh VORP data with ${state.picks.length} existing picks`);
-      
-      // Create set of drafted player names from current picks
-      const draftedPlayerNames = new Set(state.picks.map(pick => pick.player?.name).filter(Boolean));
-      
-      // Mark players as drafted if they appear in current picks
-      players = players.map(player => ({
-        ...player,
-        isDrafted: draftedPlayerNames.has(player.name) ? true : player.isDrafted,
-        draftedBy: draftedPlayerNames.has(player.name) ? 
-          state.picks.find(pick => pick.player?.name === player.name)?.team : 
-          player.draftedBy
-      }));
-      
-      console.log(`🔧 Updated ${draftedPlayerNames.size} players as drafted from current picks`);
+    // Check if we have existing draft state - if so, preserve it!
+    if (currentState.players.length === 0) {
+      // Only load fresh VORP data if we have no existing state
+      console.log('⚠️ No existing players, loading fresh VORP rankings...');
+      const globalVORPData = loadGlobalVORPRankings();
+      if (globalVORPData && globalVORPData.players.length > 0) {
+        console.log(`🚀 Loading ${globalVORPData.players.length} VORP rankings for incremental sync`);
+        dispatch({ type: 'LOAD_PLAYERS', payload: globalVORPData.players });
+        // Let the dispatch complete and rely on the next sync call
+        return;
+      } else {
+        console.error('❌ No global VORP rankings found in storage');
+        return;
+      }
     }
+
+    // Use existing state to maintain VORP calculations and draft consistency
+    console.log(`✅ Using existing ${currentState.players.length} players with current draft state (${currentState.players.filter(p => p.isDrafted).length} drafted)`);
 
     const totalPicks = incrementalData.newPicks.length;
     console.log(`🔄 Incrementally syncing ${totalPicks} new picks using worker...`);
@@ -207,12 +210,19 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
     }));
 
     try {
-      // Use worker-based incremental sync with the corrected players array
-      await processIncrementalSync(picks, players);
+      // DEBUG: Log what we're about to sync
+      console.log('🐛 WEBSOCKET SYNC DEBUG:');
+      console.log(`- About to sync ${picks.length} picks`);
+      console.log(`- Current state has ${currentState.players.length} players (${currentState.players.filter(p => p.isDrafted).length} drafted)`);
+      console.log(`- Sample undrafted players:`, currentState.players.filter(p => !p.isDrafted).slice(0, 3).map(p => `${p.name}: VORP=${p.vorp}`));
+      
+      // The worker only needs the basic pick data to find players and will return simple pick info
+      // The DraftContext will use the current state players to process these picks
+      await processIncrementalSync(picks);
       console.log(`✅ Worker-based incremental sync completed: ${incrementalData.addedCount} added, ${incrementalData.skippedCount} skipped`);
       
       // Force a UI update notification
-      console.log('🎯 UI should now reflect the new draft picks automatically');
+      console.log('🎯 UI should now reflect the new draft picks with preserved VORP calculations');
     } catch (error) {
       console.error('❌ Error during worker-based incremental sync:', error);
     }
@@ -226,11 +236,23 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
       return;
     }
 
-    // Auto-load players if needed
-    const players = ensureVORPPlayersLoadedFn();
-    if (!players || players.length === 0) {
-      console.warn('No VORP rankings available for sync verification');
-      return;
+    // CRITICAL FIX: Use current state ref instead of stale state
+    const currentState = stateRef.current;
+    console.log(`🐛 SYNC VERIFICATION - Checking current state: ${currentState.players.length} players, ${currentState.picks.length} picks`);
+    
+    // Check if we need to load players or can use existing state
+    let players = currentState.players;
+    if (players.length === 0) {
+      console.log('⚠️ No existing players, loading fresh VORP rankings for verification...');
+      const globalVORPData = loadGlobalVORPRankings();
+      if (globalVORPData && globalVORPData.players.length > 0) {
+        console.log(`🚀 Loading ${globalVORPData.players.length} VORP rankings for sync verification`);
+        dispatch({ type: 'LOAD_PLAYERS', payload: globalVORPData.players });
+        players = globalVORPData.players;
+      } else {
+        console.warn('No VORP rankings available for sync verification');
+        return;
+      }
     }
 
     console.log(`Sync verification: ${verificationData.totalPicks} total picks, gaps: ${verificationData.gaps?.length || 0}, verified: ${verificationData.verified}`);
@@ -273,18 +295,32 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
 
   const handleDraftSync = async (syncData: any) => {
     console.log('Processing draft sync from extension:', syncData);
-    console.log('Current player count in rankings:', state.players.length);
+    
+    // CRITICAL FIX: Use current state ref instead of stale state
+    const currentState = stateRef.current;
+    console.log(`🐛 BATCH SYNC - Checking current state: ${currentState.players.length} players, ${currentState.picks.length} picks`);
     
     if (!syncData.picks || !Array.isArray(syncData.picks)) {
       console.error('Invalid sync data format');
       return;
     }
 
-    // Auto-load players if needed
-    const players = ensureVORPPlayersLoadedFn();
-    if (!players || players.length === 0) {
-      alert('Please import your VORP rankings first before syncing draft picks.');
-      return;
+    // Check if we need to load players or can use existing state
+    let players = currentState.players;
+    if (players.length === 0) {
+      // Only load fresh VORP data if we have no existing state
+      console.log('⚠️ No existing players, loading fresh VORP rankings...');
+      const globalVORPData = loadGlobalVORPRankings();
+      if (globalVORPData && globalVORPData.players.length > 0) {
+        console.log(`🚀 Loading ${globalVORPData.players.length} VORP rankings for batch sync`);
+        dispatch({ type: 'LOAD_PLAYERS', payload: globalVORPData.players });
+        players = globalVORPData.players;
+      } else {
+        alert('Please import your VORP rankings first before syncing draft picks.');
+        return;
+      }
+    } else {
+      console.log(`✅ Using existing ${players.length} players for batch sync`);
     }
 
     console.log(`Using ${players.length} VORP players for draft sync`);

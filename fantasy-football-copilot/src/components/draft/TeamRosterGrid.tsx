@@ -37,6 +37,41 @@ const TeamRosterGrid: React.FC = () => {
     return needs;
   };
 
+  const getStarterRequirement = (position: Position): number => {
+    const slots = state.settings.rosterSlots;
+    switch (position) {
+      case 'QB': return slots.QB || 1;
+      case 'RB': return slots.RB || 2;
+      case 'WR': return slots.WR || 2;
+      case 'TE': return slots.TE || 1;
+      case 'K': return slots.K || 1;
+      case 'DEF': return slots.DEF || 1;
+      default: return 0;
+    }
+  };
+
+  const getPositionVORP = (teamId: string, position: Position): number => {
+    const team = state.teams.find(t => t.id === teamId);
+    if (!team) return 0;
+
+    const players = team.roster[position];
+    const starterRequirement = getStarterRequirement(position);
+    
+    // Sort by VORP to identify starters (top players by VORP)
+    const sortedPlayers = players
+      .filter(player => player.vorp !== undefined)
+      .sort((a, b) => (b.vorp || 0) - (a.vorp || 0));
+    
+    const starters = sortedPlayers.slice(0, starterRequirement);
+    return starters.reduce((sum, player) => sum + (player.vorp || 0), 0);
+  };
+
+  const getTeamStarterVORP = (teamId: string): number => {
+    return positions.reduce((total, position) => {
+      return total + getPositionVORP(teamId, position);
+    }, 0);
+  };
+
   return (
     <div className="bg-white rounded-lg shadow">
       <div className="px-6 py-4 border-b border-gray-200">
@@ -55,9 +90,14 @@ const TeamRosterGrid: React.FC = () => {
               </th>
               {positions.map(position => (
                 <th key={position} className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {position}
+                  <div>{position}</div>
+                  <div className="text-xs font-normal text-gray-400 mt-1">VORP</div>
                 </th>
               ))}
+              <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <div>Total</div>
+                <div className="text-xs font-normal text-gray-400 mt-1">Starter VORP</div>
+              </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Needs
               </th>
@@ -103,9 +143,21 @@ const TeamRosterGrid: React.FC = () => {
                           Empty
                         </div>
                       ))}
+                      
+                      {/* VORP display */}
+                      <div className="mt-2 text-xs font-semibold text-green-600">
+                        {getPositionVORP(team.id, position).toFixed(1)}
+                      </div>
                     </div>
                   </td>
                 ))}
+                
+                {/* Total Starter VORP column */}
+                <td className="px-3 py-4 text-center">
+                  <div className="text-lg font-bold text-green-600">
+                    {getTeamStarterVORP(team.id).toFixed(1)}
+                  </div>
+                </td>
                 
                 <td className="px-4 py-4">
                   <div className="flex flex-wrap gap-1">

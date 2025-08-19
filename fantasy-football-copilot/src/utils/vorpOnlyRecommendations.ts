@@ -22,6 +22,12 @@ export class VORPOnlyRecommendationsEngine {
   }
 
   getRecommendations(limit: number = 10): Recommendation[] {
+    // DEBUG: Add detailed logging
+    console.log('🐛 VORP RECOMMENDATIONS DEBUG:');
+    console.log(`- Total players in engine: ${this.players.length}`);
+    console.log(`- Players marked as drafted: ${this.players.filter(p => p.isDrafted).length}`);
+    console.log(`- Players with draftedBy set: ${this.players.filter(p => p.draftedBy).length}`);
+    
     // Double-check that we're filtering out drafted players properly
     const availablePlayers = this.players.filter(p => {
       // Strict checking for drafted status
@@ -40,7 +46,11 @@ export class VORPOnlyRecommendationsEngine {
       return [];
     }
     
-    console.log(`Found ${availablePlayers.length} available players for VORP recommendations`);
+    console.log(`🐛 Found ${availablePlayers.length} available players for VORP recommendations`);
+    
+    // Log top few available players to see what we're working with
+    const topFew = availablePlayers.slice(0, 5);
+    console.log('🐛 Top available players by VORP:', topFew.map(p => `${p.name}: ${p.vorp || 'undefined'}`));
     
     const scoredPlayers = availablePlayers.map(player => ({
       player,
