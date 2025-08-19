@@ -14,6 +14,7 @@ interface SyncMessage {
     players: any[];
     teams: any[];
     settings: any;
+    playerMappings?: any[];
   };
 }
 
@@ -49,9 +50,9 @@ self.onmessage = function(e: MessageEvent<SyncMessage>) {
 };
 
 function processBatchSync(data: SyncMessage['payload']) {
-  const { picks, players, teams, settings } = data;
+  const { picks, players, teams, settings, playerMappings } = data;
   const processedPicks: any[] = [];
-  const playerLookup = createPlayerLookup(players);
+  const playerLookup = createPlayerLookup(players, playerMappings);
   const teamLookup = createTeamLookup(teams);
   
   const totalPicks = picks.length;
@@ -97,9 +98,9 @@ function processBatchSync(data: SyncMessage['payload']) {
 }
 
 function processIncrementalSync(data: SyncMessage['payload']) {
-  const { picks, players, teams, settings } = data;
+  const { picks, players, teams, settings, playerMappings } = data;
   const processedPicks: any[] = [];
-  const playerLookup = createPlayerLookup(players);
+  const playerLookup = createPlayerLookup(players, playerMappings);
   const teamLookup = createTeamLookup(teams);
   
   for (const pickData of picks) {
@@ -118,26 +119,53 @@ function processIncrementalSync(data: SyncMessage['payload']) {
   } as SyncResult);
 }
 
-function createPlayerLookup(players: any[]): Map<string, any> {
+function createPlayerLookup(players: any[], playerMappings?: any[]): { lookup: Map<string, any>; mappingLookup: Map<string, any>; undraftedPlayers: any[] } {
   const lookup = new Map();
-  for (const player of players) {
-    if (!player.isDrafted) {
-      const normalizedName = player.name.toLowerCase().trim();
-      lookup.set(normalizedName, player);
-      
-      // Add variations for better matching
-      const cleanName = normalizedName
-        .replace(/[.']/g, '')
-        .replace(/\s+jr\.?$/, '')
-        .replace(/\s+sr\.?$/, '')
-        .replace(/\s+iii?$/, '')
-        .trim();
-      if (cleanName !== normalizedName) {
-        lookup.set(cleanName, player);
+  
+  // Create mapping lookup for fast access
+  const mappingLookup = new Map();
+  if (playerMappings) {
+    for (const mapping of playerMappings) {
+      mappingLookup.set(mapping.yahooName.toLowerCase().trim(), mapping.vorpName.toLowerCase().trim());
+    }
+  }
+  
+  // Keep original players array for includes matching
+  const undraftedPlayers = players.filter(p => !p.isDrafted);
+  
+  for (const player of undraftedPlayers) {
+    const normalizedName = player.name.toLowerCase().trim();
+    lookup.set(normalizedName, player);
+    
+    // Add variations for better matching
+    const cleanName = normalizedName
+      .replace(/[.']/g, '')
+      .replace(/\s+jr\.?$/i, '')
+      .replace(/\s+sr\.?$/i, '')
+      .replace(/\s+iii?$/i, '')
+      .trim();
+    if (cleanName !== normalizedName) {
+      lookup.set(cleanName, player);
+    }
+    
+    // Add partial name variants for better matching
+    const nameParts = normalizedName.split(/\s+/);
+    if (nameParts.length > 1) {
+      // Add combinations of name parts
+      for (let i = 0; i < nameParts.length; i++) {
+        for (let j = i + 1; j <= nameParts.length; j++) {
+          const partialName = nameParts.slice(i, j).join(' ');
+          if (partialName.length > 2) { // Only meaningful partial names
+            if (!lookup.has(partialName)) {
+              lookup.set(partialName, player);
+            }
+          }
+        }
       }
     }
   }
-  return lookup;
+  
+  return { lookup, mappingLookup, undraftedPlayers };
 }
 
 function createTeamLookup(teams: any[]): Map<string, any> {
@@ -150,22 +178,84 @@ function createTeamLookup(teams: any[]): Map<string, any> {
 
 function processIndividualPick(
   pickData: PickData,
-  playerLookup: Map<string, any>,
+  playerLookupData: { lookup: Map<string, any>, mappingLookup: Map<string, any>, undraftedPlayers: any[] },
   teamLookup: Map<string, any>,
   settings: any
 ): any | null {
   const { playerName, teamName, pickNumber } = pickData;
+  const { lookup: playerLookup, mappingLookup, undraftedPlayers } = playerLookupData;
   
-  // Fast player lookup
+  // Enhanced player lookup with mapping support
   const normalizedPlayerName = playerName.toLowerCase().trim();
-  const cleanPlayerName = normalizedPlayerName
-    .replace(/[.']/g, '')
-    .replace(/\s+jr\.?$/, '')
-    .replace(/\s+sr\.?$/, '')
-    .replace(/\s+iii?$/, '')
-    .trim();
   
-  let player = playerLookup.get(normalizedPlayerName) || playerLookup.get(cleanPlayerName);
+  // 1. Try exact match first
+  let player = playerLookup.get(normalizedPlayerName);
+  
+  if (!player) {
+    // 2. Try mapping lookup
+    const mappedName = mappingLookup.get(normalizedPlayerName);
+    if (mappedName) {
+      player = playerLookup.get(mappedName);
+      if (player) {
+        console.log(`Found player via mapping: "${playerName}" -> "${mappedName}" -> ${player.name}`);
+      }
+    }
+  }
+  
+  if (!player) {
+    // 3. Try clean name variations
+    const cleanPlayerName = normalizedPlayerName
+      .replace(/[.']/g, '')
+      .replace(/\s+jr\.?$/, '')
+      .replace(/\s+sr\.?$/, '')
+      .replace(/\s+iii?$/, '')
+      .trim();
+    
+    player = playerLookup.get(cleanPlayerName);
+  }
+  
+  if (!player) {
+    // 4. Try partial matches using name parts
+    const nameParts = normalizedPlayerName.split(/\s+/);
+    if (nameParts.length > 1) {
+      // Try different combinations of name parts
+      for (let i = 0; i < nameParts.length && !player; i++) {
+        for (let j = i + 1; j <= nameParts.length && !player; j++) {
+          const partialName = nameParts.slice(i, j).join(' ');
+          if (partialName.length > 2) {
+            player = playerLookup.get(partialName);
+          }
+        }
+      }
+    }
+  }
+  
+  if (!player) {
+    // 5. Fallback: bidirectional includes matching (like manual sync)
+    const cleanSearchName = normalizedPlayerName
+      .replace(/[.']/g, '')
+      .replace(/\s+jr\.?$/i, '')
+      .replace(/\s+sr\.?$/i, '')
+      .replace(/\s+iii?$/i, '')
+      .trim();
+    
+    // Search through all undrafted players for includes match
+    for (const candidatePlayer of undraftedPlayers) {
+      const cleanPlayerName = candidatePlayer.name.toLowerCase().trim()
+        .replace(/[.']/g, '')
+        .replace(/\s+jr\.?$/i, '')
+        .replace(/\s+sr\.?$/i, '')
+        .replace(/\s+iii?$/i, '')
+        .trim();
+      
+      // Bidirectional includes matching (just like manual sync)
+      if (cleanPlayerName.includes(cleanSearchName) || cleanSearchName.includes(cleanPlayerName)) {
+        player = candidatePlayer;
+        console.log(`Found player via includes matching: "${playerName}" -> "${candidatePlayer.name}"`);
+        break;
+      }
+    }
+  }
   
   if (!player) {
     console.warn('Player not found for sync:', playerName);

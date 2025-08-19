@@ -711,6 +711,51 @@ function calculatePicksUntilMyTurn(currentPick: number, draftSlot: number, numbe
   }
 }
 
+// Helper function to calculate pick numbers for multiple rounds ahead
+function calculateMyPickInRounds(currentPick: number, draftSlot: number, numberOfTeams: number, draftType: string, roundsAhead: number): number[] {
+  const picks: number[] = [];
+  
+  for (let i = 1; i <= roundsAhead; i++) {
+    if (draftType === 'Linear') {
+      const currentRound = Math.ceil(currentPick / numberOfTeams);
+      const targetRound = currentRound + i - 1;
+      const pickInRound = (targetRound - 1) * numberOfTeams + draftSlot;
+      
+      if (pickInRound >= currentPick) {
+        picks.push(pickInRound);
+      } else {
+        // Move to next round if we've already passed our pick in this round
+        picks.push(targetRound * numberOfTeams + draftSlot);
+      }
+    } else {
+      // Snake draft logic - find the next i picks for this user
+      const currentRound = Math.ceil(currentPick / numberOfTeams);
+      let targetRound = currentRound;
+      let picksFound = 0;
+      
+      while (picksFound < i && targetRound <= currentRound + 10) { // Safety limit
+        const isOddRound = targetRound % 2 === 1;
+        let pickInRound: number;
+        
+        if (isOddRound) {
+          pickInRound = (targetRound - 1) * numberOfTeams + draftSlot;
+        } else {
+          pickInRound = (targetRound - 1) * numberOfTeams + (numberOfTeams - draftSlot + 1);
+        }
+        
+        if (pickInRound >= currentPick) {
+          picks.push(pickInRound);
+          picksFound++;
+        }
+        
+        targetRound++;
+      }
+    }
+  }
+  
+  return picks;
+}
+
 const DraftContext = createContext<{
   state: DraftState;
   dispatch: React.Dispatch<DraftAction>;
@@ -740,3 +785,5 @@ export const useDraft = () => {
   }
   return context;
 };
+
+export { calculateMyPickInRounds };

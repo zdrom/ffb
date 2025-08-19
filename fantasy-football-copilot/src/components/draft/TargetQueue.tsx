@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { X, Target as TargetIcon } from 'lucide-react';
 import { useDraft } from '../../contexts/DraftContext';
+import { calculateMultiRoundReach } from '../../utils/reachProbability';
 import type { Player } from '../../types';
 
 const TargetQueue: React.FC = () => {
@@ -27,24 +28,8 @@ const TargetQueue: React.FC = () => {
     return colors[position] || 'bg-gray-100 text-gray-800';
   };
 
-  const calculateReachProbability = (player: Player): number => {
-    if (state.picksUntilMyTurn === 0) return 100;
-    
-    const picksBeforeMyTurn = state.picksUntilMyTurn;
-    const playerADP = player.adp;
-    const currentPick = state.currentPick;
-    
-    // Basic reach probability calculation
-    // If player's ADP is after my next pick, high probability
-    const myNextPick = currentPick + picksBeforeMyTurn;
-    
-    if (playerADP >= myNextPick) {
-      return Math.max(70, 100 - ((playerADP - myNextPick) * 2));
-    } else {
-      // Player's ADP is before my turn, calculate risk
-      const adpDiff = myNextPick - playerADP;
-      return Math.max(10, 80 - (adpDiff * 8));
-    }
+  const getMultiRoundAnalysis = (player: Player) => {
+    return calculateMultiRoundReach(player, state);
   };
 
   const getReachProbabilityColor = (probability: number) => {
@@ -92,7 +77,8 @@ const TargetQueue: React.FC = () => {
       ) : (
         <div className="space-y-3">
           {targetedPlayers.map((player, index) => {
-            const reachProbability = calculateReachProbability(player);
+            const multiRoundAnalysis = getMultiRoundAnalysis(player);
+            const reachProbability = multiRoundAnalysis.nextRound.probability;
             
             return (
               <div
@@ -128,19 +114,47 @@ const TargetQueue: React.FC = () => {
                       )}
                     </div>
                     
-                    <div className="mt-2 flex items-center gap-4">
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs font-medium text-gray-600">Reach Probability:</span>
-                        <span className={`text-xs font-bold ${getReachProbabilityColor(reachProbability)}`}>
-                          {reachProbability.toFixed(0)}%
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs font-medium text-gray-600">Next Round:</span>
+                          <span className={`text-xs font-bold ${getReachProbabilityColor(reachProbability)}`}>
+                            {reachProbability}%
+                          </span>
+                        </div>
+                        
+                        {multiRoundAnalysis.twoRoundsAhead.probability > 0 && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-medium text-gray-600">2 Rounds:</span>
+                            <span className={`text-xs font-bold ${getReachProbabilityColor(multiRoundAnalysis.twoRoundsAhead.probability)}`}>
+                              {multiRoundAnalysis.twoRoundsAhead.probability}%
+                            </span>
+                          </div>
+                        )}
+                        
+                        {state.picksUntilMyTurn > 0 && (
+                          <div className="text-xs text-gray-500">
+                            {state.picksUntilMyTurn} pick{state.picksUntilMyTurn !== 1 ? 's' : ''} until your turn
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-gray-600">Strategy:</span>
+                        <span className={`text-xs font-bold px-2 py-1 rounded ${
+                          multiRoundAnalysis.bestStrategy.recommendation === 'Draft Now' 
+                            ? 'bg-red-100 text-red-700'
+                            : multiRoundAnalysis.bestStrategy.recommendation === 'Wait 1 Round'
+                            ? 'bg-yellow-100 text-yellow-700'
+                            : 'bg-green-100 text-green-700'
+                        }`}>
+                          {multiRoundAnalysis.bestStrategy.recommendation}
                         </span>
                       </div>
                       
-                      {state.picksUntilMyTurn > 0 && (
-                        <div className="text-xs text-gray-500">
-                          {state.picksUntilMyTurn} pick{state.picksUntilMyTurn !== 1 ? 's' : ''} until your turn
-                        </div>
-                      )}
+                      <div className="text-xs text-gray-500 italic">
+                        {multiRoundAnalysis.bestStrategy.reasoning}
+                      </div>
                     </div>
                   </div>
                   
@@ -172,11 +186,18 @@ const TargetQueue: React.FC = () => {
       
       {targetedPlayers.length > 0 && (
         <div className="mt-4 p-3 bg-gray-50 rounded border text-xs text-gray-600">
-          <div className="font-medium mb-1">Reach Probability Legend:</div>
-          <div className="flex flex-wrap gap-4">
-            <span className="text-green-600">●</span> 80%+ likely available
-            <span className="text-yellow-600">●</span> 50-79% chance available  
-            <span className="text-red-600">●</span> &lt;50% chance available
+          <div className="font-medium mb-2">Enhanced Reach Analysis:</div>
+          <div className="space-y-1">
+            <div className="flex flex-wrap gap-4">
+              <span className="text-green-600">●</span> 80%+ likely available
+              <span className="text-yellow-600">●</span> 50-79% chance available  
+              <span className="text-red-600">●</span> &lt;50% chance available
+            </div>
+            <div className="mt-2 space-y-1">
+              <div><strong>Next Round:</strong> Probability available at your next pick</div>
+              <div><strong>2 Rounds:</strong> Probability available two rounds from now</div>
+              <div><strong>Strategy:</strong> AI recommendation based on multi-round analysis</div>
+            </div>
           </div>
         </div>
       )}

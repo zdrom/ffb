@@ -16,18 +16,22 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
 
   // Helper function to ensure VORP players are loaded
   const ensureVORPPlayersLoadedFn = () => {
+    console.log(`🔍 Checking player state: ${state.players.length} players loaded, ${state.picks.length} picks made`);
+    
     if (state.players.length === 0) {
-      console.log('No players loaded, attempting to load from global VORP rankings...');
+      console.log('⚠️ No players loaded, attempting to load from global VORP rankings...');
       const globalVORPData = loadGlobalVORPRankings();
       if (globalVORPData && globalVORPData.players.length > 0) {
-        console.log(`Auto-loading ${globalVORPData.players.length} VORP rankings for draft sync`);
+        console.log(`🚀 Auto-loading ${globalVORPData.players.length} VORP rankings for draft sync`);
         dispatch({ type: 'LOAD_PLAYERS', payload: globalVORPData.players });
         return globalVORPData.players; // Return the actual players data
       } else {
-        console.error('No global VORP rankings found in storage');
+        console.error('❌ No global VORP rankings found in storage');
         return null;
       }
     }
+    
+    console.log(`✅ Using existing ${state.players.length} players (${state.players.filter(p => p.isDrafted).length} drafted)`);
     return state.players; // Return existing players
   };
 
@@ -166,11 +170,30 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
       return;
     }
 
-    // Auto-load players if needed
-    const players = ensureVORPPlayersLoadedFn();
+    // Auto-load players if needed, but also ensure we have current draft state
+    let players = ensureVORPPlayersLoadedFn();
     if (!players || players.length === 0) {
       console.warn('⚠️ No VORP rankings available for incremental sync');
       return;
+    }
+    
+    // CRITICAL: Merge with current picks to maintain draft state
+    if (state.picks.length > 0) {
+      console.log(`🔧 Merging fresh VORP data with ${state.picks.length} existing picks`);
+      
+      // Create set of drafted player names from current picks
+      const draftedPlayerNames = new Set(state.picks.map(pick => pick.player?.name).filter(Boolean));
+      
+      // Mark players as drafted if they appear in current picks
+      players = players.map(player => ({
+        ...player,
+        isDrafted: draftedPlayerNames.has(player.name) ? true : player.isDrafted,
+        draftedBy: draftedPlayerNames.has(player.name) ? 
+          state.picks.find(pick => pick.player?.name === player.name)?.team : 
+          player.draftedBy
+      }));
+      
+      console.log(`🔧 Updated ${draftedPlayerNames.size} players as drafted from current picks`);
     }
 
     const totalPicks = incrementalData.newPicks.length;
@@ -184,8 +207,8 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
     }));
 
     try {
-      // Use worker-based incremental sync
-      await processIncrementalSync(picks);
+      // Use worker-based incremental sync with the corrected players array
+      await processIncrementalSync(picks, players);
       console.log(`✅ Worker-based incremental sync completed: ${incrementalData.addedCount} added, ${incrementalData.skippedCount} skipped`);
       
       // Force a UI update notification
