@@ -5,7 +5,7 @@ import type { Position } from '../../types';
 
 const TeamRosterGrid: React.FC = () => {
   const { state, dispatch } = useDraft();
-  const positions: Position[] = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
+  const positions: Position[] = ['QB', 'RB', 'WR', 'TE', 'W/R/T', 'K', 'DEF'];
 
   // Debug function to validate roster integrity
   React.useEffect(() => {
@@ -23,7 +23,7 @@ const TeamRosterGrid: React.FC = () => {
         
         // Count players in roster
         const rosterPlayerCount = positions.reduce((total, pos) => {
-          return total + (team.roster[pos]?.length || 0);
+          return total + ((team.roster[pos] || []).length);
         }, 0);
         console.log(`  Players in roster: ${rosterPlayerCount}`);
         
@@ -33,14 +33,14 @@ const TeamRosterGrid: React.FC = () => {
           
           // Detail the mismatch
           positions.forEach(pos => {
-            const posRosterCount = team.roster[pos]?.length || 0;
+            const posRosterCount = (team.roster[pos] || []).length;
             const posPickCount = teamPicks.filter(pick => pick.player?.position === pos).length;
             if (posRosterCount !== posPickCount) {
               console.warn(`    ${pos}: ${posPickCount} picks vs ${posRosterCount} roster players`);
               
               // Show actual players
               const pickPlayers = teamPicks.filter(pick => pick.player?.position === pos).map(p => p.player?.name);
-              const rosterPlayers = team.roster[pos]?.map(p => p.name) || [];
+              const rosterPlayers = (team.roster[pos] || []).map(p => p.name);
               console.log(`      Pick players: [${pickPlayers.join(', ')}]`);
               console.log(`      Roster players: [${rosterPlayers.join(', ')}]`);
             }
@@ -60,7 +60,7 @@ const TeamRosterGrid: React.FC = () => {
           return;
         }
         
-        const isInRoster = team.roster[player.position]?.some(p => p.id === player.id);
+        const isInRoster = (team.roster[player.position] || []).some(p => p.id === player.id);
         if (!isInRoster) {
           console.warn(`⚠️  Player ${player.name} draftedBy ${team.name} but not in team's ${player.position} roster`);
         }
@@ -74,6 +74,7 @@ const TeamRosterGrid: React.FC = () => {
       RB: 'bg-green-100 text-green-800 border-green-200',
       WR: 'bg-blue-100 text-blue-800 border-blue-200',
       TE: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+      'W/R/T': 'bg-orange-100 text-orange-800 border-orange-200',
       K: 'bg-purple-100 text-purple-800 border-purple-200',
       DEF: 'bg-gray-100 text-gray-800 border-gray-200'
     };
@@ -88,8 +89,18 @@ const TeamRosterGrid: React.FC = () => {
     const rosterSlots = state.settings.rosterSlots;
 
     positions.forEach(position => {
-      const currentCount = team.roster[position].length;
-      const requiredCount = rosterSlots[position];
+      // Skip FLEX position as it's calculated dynamically from WR/RB/TE
+      if (position === 'W/R/T') {
+        const flexSlots = rosterSlots['W/R/T'] || 0;
+        const flexPlayer = getFlexPlayer(teamId);
+        if (flexSlots > 0 && !flexPlayer) {
+          needs.push(position);
+        }
+        return;
+      }
+
+      const currentCount = (team.roster[position] || []).length;
+      const requiredCount = rosterSlots[position] || 0;
       if (currentCount < requiredCount) {
         needs.push(position);
       }
@@ -105,17 +116,71 @@ const TeamRosterGrid: React.FC = () => {
       case 'RB': return slots.RB || 2;
       case 'WR': return slots.WR || 2;
       case 'TE': return slots.TE || 1;
+      case 'W/R/T': return slots['W/R/T'] || 1;
       case 'K': return slots.K || 1;
       case 'DEF': return slots.DEF || 1;
       default: return 0;
     }
   };
 
+  const getFlexPlayer = (teamId: string): Player | null => {
+    const team = state.teams.find(t => t.id === teamId);
+    if (!team) return null;
+
+    // Get all WR/RB/TE players
+    const wrPlayers = team.roster['WR'] || [];
+    const rbPlayers = team.roster['RB'] || [];
+    const tePlayers = team.roster['TE'] || [];
+    
+    // Combine and sort by VORP
+    const allFlexEligible = [...wrPlayers, ...rbPlayers, ...tePlayers]
+      .filter(player => player.vorp !== undefined)
+      .sort((a, b) => (b.vorp || 0) - (a.vorp || 0));
+    
+    // Determine how many starters are needed for each position
+    const wrStarters = getStarterRequirement('WR');
+    const rbStarters = getStarterRequirement('RB');
+    const teStarters = getStarterRequirement('TE');
+    
+    // Get the starters for each position
+    const wrStarterPlayers = wrPlayers
+      .filter(player => player.vorp !== undefined)
+      .sort((a, b) => (b.vorp || 0) - (a.vorp || 0))
+      .slice(0, wrStarters);
+      
+    const rbStarterPlayers = rbPlayers
+      .filter(player => player.vorp !== undefined)
+      .sort((a, b) => (b.vorp || 0) - (a.vorp || 0))
+      .slice(0, rbStarters);
+      
+    const teStarterPlayers = tePlayers
+      .filter(player => player.vorp !== undefined)
+      .sort((a, b) => (b.vorp || 0) - (a.vorp || 0))
+      .slice(0, teStarters);
+    
+    // Get starter IDs
+    const starterIds = new Set([
+      ...wrStarterPlayers.map(p => p.id),
+      ...rbStarterPlayers.map(p => p.id),
+      ...teStarterPlayers.map(p => p.id)
+    ]);
+    
+    // Find the best non-starter (flex player)
+    const flexPlayer = allFlexEligible.find(player => !starterIds.has(player.id));
+    return flexPlayer || null;
+  };
+
   const getPositionVORP = (teamId: string, position: Position): number => {
     const team = state.teams.find(t => t.id === teamId);
     if (!team) return 0;
 
-    const players = team.roster[position];
+    // Special handling for FLEX position
+    if (position === 'W/R/T') {
+      const flexPlayer = getFlexPlayer(teamId);
+      return flexPlayer?.vorp || 0;
+    }
+
+    const players = team.roster[position] || [];
     const starterRequirement = getStarterRequirement(position);
     
     // Sort by VORP to identify starters (top players by VORP)
@@ -190,29 +255,68 @@ const TeamRosterGrid: React.FC = () => {
                 {positions.map(position => (
                   <td key={position} className="px-3 py-4 text-center">
                     <div className="space-y-1">
-                      {team.roster[position].map((player, playerIndex) => (
-                        <div
-                          key={`${player.id}-${playerIndex}`}
-                          className={`inline-block px-2 py-1 rounded text-xs font-medium border ${getPositionColor(position)}`}
-                          title={`${player.name} (${player.team})`}
-                        >
-                          {player.name.length > 12 
-                            ? `${player.name.substring(0, 12)}...` 
-                            : player.name
-                          }
-                        </div>
-                      ))}
-                      
-                      {Array.from({ 
-                        length: Math.max(0, state.settings.rosterSlots[position] - team.roster[position].length) 
-                      }).map((_, emptyIndex) => (
-                        <div
-                          key={`empty-${position}-${emptyIndex}`}
-                          className="inline-block px-2 py-1 rounded text-xs border border-dashed border-gray-300 text-gray-400"
-                        >
-                          Empty
-                        </div>
-                      ))}
+                      {position === 'W/R/T' ? (
+                        // Special handling for FLEX position
+                        (() => {
+                          const flexPlayer = getFlexPlayer(team.id);
+                          const flexSlots = state.settings.rosterSlots['W/R/T'] || 0;
+                          
+                          return (
+                            <>
+                              {flexPlayer && (
+                                <div
+                                  key={flexPlayer.id}
+                                  className={`inline-block px-2 py-1 rounded text-xs font-medium border ${getPositionColor(position)}`}
+                                  title={`${flexPlayer.name} (${flexPlayer.team}) - ${flexPlayer.position}`}
+                                >
+                                  {flexPlayer.name.length > 12 
+                                    ? `${flexPlayer.name.substring(0, 12)}...` 
+                                    : flexPlayer.name
+                                  }
+                                </div>
+                              )}
+                              
+                              {Array.from({ 
+                                length: Math.max(0, flexSlots - (flexPlayer ? 1 : 0))
+                              }).map((_, emptyIndex) => (
+                                <div
+                                  key={`empty-${position}-${emptyIndex}`}
+                                  className="inline-block px-2 py-1 rounded text-xs border border-dashed border-gray-300 text-gray-400"
+                                >
+                                  Empty
+                                </div>
+                              ))}
+                            </>
+                          );
+                        })()
+                      ) : (
+                        // Regular position handling
+                        <>
+                          {(team.roster[position] || []).map((player, playerIndex) => (
+                            <div
+                              key={`${player.id}-${playerIndex}`}
+                              className={`inline-block px-2 py-1 rounded text-xs font-medium border ${getPositionColor(position)}`}
+                              title={`${player.name} (${player.team})`}
+                            >
+                              {player.name.length > 12 
+                                ? `${player.name.substring(0, 12)}...` 
+                                : player.name
+                              }
+                            </div>
+                          ))}
+                          
+                          {Array.from({ 
+                            length: Math.max(0, (state.settings.rosterSlots[position] || 0) - (team.roster[position] || []).length) 
+                          }).map((_, emptyIndex) => (
+                            <div
+                              key={`empty-${position}-${emptyIndex}`}
+                              className="inline-block px-2 py-1 rounded text-xs border border-dashed border-gray-300 text-gray-400"
+                            >
+                              Empty
+                            </div>
+                          ))}
+                        </>
+                      )}
                       
                       {/* VORP display */}
                       <div className="mt-2 text-xs font-semibold text-green-600">

@@ -1,15 +1,13 @@
 import { useMemo } from 'react';
 import { useDraft } from '../../contexts/DraftContext';
-import { useAIStrategy } from '../../hooks/useAIStrategy';
+import { useAIStrategy, useAIConfig } from '../../hooks/useAIStrategy';
 import { DynamicVORPEngine } from '../../utils/dynamicVORP';
 import { calculateReachProbability } from '../../utils/reachProbability';
+import { StrategicAnalysisEngine } from '../../utils/strategicAnalysis';
 import type { AIStrategyInput } from '../../types/ai';
 import { Brain, TrendingUp, AlertTriangle, Target, Loader2 } from 'lucide-react';
 
 import { TopRecommendations } from './TopRecommendations';
-import { WhatIfForesight } from './WhatIfForesight';
-import { RosterBalance } from './RosterBalance';
-import { TargetAlerts } from './TargetAlerts';
 import { AIConfigPanel } from './AIConfigPanel';
 
 interface AIStrategyOverlayProps {
@@ -19,10 +17,11 @@ interface AIStrategyOverlayProps {
 
 export function AIStrategyOverlay({ className = '', collapsed = false }: AIStrategyOverlayProps) {
   const { state } = useDraft();
+  const { apiKey, isConfigured: isApiConfigured } = useAIConfig();
   
   // Prepare AI input data
   const aiInput = useMemo((): AIStrategyInput | null => {
-    if (!state.isActive || state.players.length === 0) {
+    if (state.players.length === 0 || state.teams.length === 0) {
       return null;
     }
 
@@ -58,7 +57,9 @@ export function AIStrategyOverlay({ className = '', collapsed = false }: AIStrat
       };
     });
 
-    return {
+    // Generate enhanced strategic analysis
+    const strategicEngine = new StrategicAnalysisEngine(state.players, state.teams, state);
+    const baseInput = {
       availablePlayers,
       userTeam,
       allTeams: state.teams,
@@ -67,22 +68,28 @@ export function AIStrategyOverlay({ className = '', collapsed = false }: AIStrat
       probabilities,
       vorpData
     };
+    
+    return strategicEngine.generateEnhancedInput(baseInput);
   }, [state]);
 
   const {
     strategy,
     isLoading,
     error,
-    isConfigured,
     lastUpdated,
     refreshStrategy,
     clearError
   } = useAIStrategy(aiInput, {
     enabled: true,
-    autoRefresh: false
+    autoRefresh: false,
+    config: isApiConfigured ? {
+      provider: 'openai',
+      apiKey: apiKey,
+      model: 'gpt-4o-mini'
+    } : undefined
   });
 
-  if (!isConfigured) {
+  if (!isApiConfigured) {
     return (
       <div className={`bg-white rounded-lg shadow-md border p-4 ${className}`}>
         <div className="flex items-center gap-2 mb-3">
@@ -178,29 +185,18 @@ export function AIStrategyOverlay({ className = '', collapsed = false }: AIStrat
 
       {/* Strategy Content */}
       {strategy && (
-        <div className="p-4 space-y-4">
-          {/* Top Recommendations */}
+        <div className="p-4">
+          {/* Strategic Summary */}
+          {strategy.summary && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800 font-medium">{strategy.summary}</p>
+            </div>
+          )}
+
+          {/* Top 3 Recommendations Only */}
           <TopRecommendations 
             recommendations={strategy.topRecommendations}
             picksUntilMyTurn={state.picksUntilMyTurn}
-          />
-
-          {/* What-If Foresight */}
-          <WhatIfForesight 
-            foresight={strategy.whatIfForesight}
-            currentPick={state.currentPick}
-          />
-
-          {/* Roster Balance */}
-          <RosterBalance 
-            balance={strategy.rosterBalance}
-            userTeam={state.teams.find(t => t.isUser)!}
-          />
-
-          {/* Target Alerts */}
-          <TargetAlerts 
-            alerts={strategy.targetAlerts}
-            availablePlayers={state.players.filter(p => !p.isDrafted)}
           />
         </div>
       )}

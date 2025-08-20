@@ -110,7 +110,7 @@ export interface CustomScoring {
   };
 }
 
-export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'K' | 'DEF';
+export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'W/R/T' | 'K' | 'DEF';
 
 export interface PositionalRun {
   position: Position;

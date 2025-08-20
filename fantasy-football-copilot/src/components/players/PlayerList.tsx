@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Star, Ban, Trophy, Target, ChevronDown, ChevronUp, Filter } from 'lucide-react';
 import { useDraft } from '../../contexts/DraftContext';
+import { calculateReachProbability } from '../../utils/reachProbability';
 import type { Position } from '../../types';
 
 const PlayerList: React.FC = () => {
@@ -214,6 +215,9 @@ const PlayerList: React.FC = () => {
                 </div>
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Availability
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Info
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -222,7 +226,10 @@ const PlayerList: React.FC = () => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {filteredAndSortedPlayers.map((player) => (
+            {filteredAndSortedPlayers.map((player) => {
+              const reachProb = calculateReachProbability(player, state);
+              
+              return (
               <tr 
                 key={player.id} 
                 className={`hover:bg-gray-50 ${player.isTargeted ? 'bg-blue-50' : ''} ${player.isDoNotDraft ? 'bg-red-50 opacity-60' : ''}`}
@@ -257,6 +264,39 @@ const PlayerList: React.FC = () => {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {player.adp === 999 ? '-' : player.adp.toFixed(1)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center space-x-2">
+                    {/* Next Pick Percentage */}
+                    <span 
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        reachProb.nextPickProbability >= 75 ? 'bg-green-100 text-green-800' :
+                        reachProb.nextPickProbability >= 45 ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-red-100 text-red-800'
+                      }`}
+                      title={`Next pick: ${reachProb.nextPickProbability}%`}
+                    >
+                      Next: {reachProb.nextPickProbability}%
+                    </span>
+                    {/* Following Pick Percentage */}
+                    <span 
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        reachProb.followingPickProbability >= 75 ? 'bg-green-100 text-green-800' :
+                        reachProb.followingPickProbability >= 45 ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-red-100 text-red-800'
+                      }`}
+                      title={`Following pick: ${reachProb.followingPickProbability}%`}
+                    >
+                      After: {reachProb.followingPickProbability}%
+                    </span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                      reachProb.riskLevel === 'Low' ? 'bg-green-100 text-green-800' :
+                      reachProb.riskLevel === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-red-100 text-red-800'
+                    }`}>
+                      {reachProb.riskLevel}
+                    </span>
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center space-x-2">
@@ -296,7 +336,8 @@ const PlayerList: React.FC = () => {
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

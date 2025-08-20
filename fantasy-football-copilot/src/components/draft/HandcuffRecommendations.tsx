@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useDraft } from '../../contexts/DraftContext';
 import { generateHandcuffRecommendations } from '../../utils/handcuffs';
+import { ProbabilityDisplay } from '../common/ProbabilityDisplay';
 import { Users, AlertTriangle } from 'lucide-react';
 
 const HandcuffRecommendations = () => {
@@ -91,11 +92,16 @@ const HandcuffRecommendations = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right space-y-1">
                     <div className="text-xs text-gray-500">Tier {handcuff.player.tier}</div>
                     {handcuff.player.vorp && (
                       <div className="text-xs text-blue-600">VORP: {handcuff.player.vorp.toFixed(1)}</div>
                     )}
+                    <ProbabilityDisplay 
+                      player={handcuff.player} 
+                      draftState={state} 
+                      size="small"
+                    />
                   </div>
                 </div>
               ))}

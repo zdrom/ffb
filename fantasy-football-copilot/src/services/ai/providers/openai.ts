@@ -18,15 +18,16 @@ export class OpenAIProvider implements AIProvider {
         messages: [
           {
             role: 'system',
-            content: 'You are a fantasy football draft assistant. You provide structured JSON responses only. Keep explanations to 35 words maximum.'
+            content: 'You are a fantasy draft assistant. Reply with VALID JSON ONLY that matches the provided schema. No code fences or explanations.'
           },
           {
             role: 'user',
             content: prompt
           }
         ],
-        temperature: 0.3,
-        max_tokens: 2000
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+        max_tokens: 1400
       }),
       signal: AbortSignal.timeout(config.timeout || 15000)
     });

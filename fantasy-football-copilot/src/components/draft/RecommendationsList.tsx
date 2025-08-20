@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { TrendingUp, Star, Target, AlertTriangle, CheckCircle, Clock, BarChart3 } from 'lucide-react';
 import { useDraft } from '../../contexts/DraftContext';
 import { VORPOnlyRecommendationsEngine } from '../../utils/vorpOnlyRecommendations';
+import { ProbabilityDisplay } from '../common/ProbabilityDisplay';
 import type { Recommendation } from '../../types';
 
 const RecommendationsList: React.FC = () => {
@@ -172,6 +173,14 @@ const RecommendationsList: React.FC = () => {
                     <span>ADP: {rec.player.adp.toFixed(1)}</span>
                   )}
                   <span className="font-semibold">VORP: {rec.score}</span>
+                  <div className="flex items-center gap-1">
+                    <span>Available:</span>
+                    <ProbabilityDisplay 
+                      player={rec.player} 
+                      draftState={state} 
+                      size="small"
+                    />
+                  </div>
                 </div>
 
                 {rec.reasons.length > 0 && (

@@ -24,6 +24,11 @@ export class AIStrategyService {
     try {
       const prompt = this.buildPrompt(input);
       
+      // Console log the prompt for review
+      console.group('🤖 AI Prompt Being Sent:');
+      console.log(prompt);
+      console.groupEnd();
+      
       const providerConfig: AIProviderConfig = {
         apiKey: this.config.apiKey,
         model: this.config.model,
@@ -32,6 +37,12 @@ export class AIStrategyService {
       };
 
       const rawResponse = await this.provider.generateCompletion(prompt, providerConfig);
+      
+      // Console log the raw response for review
+      console.group('🤖 AI Raw Response:');
+      console.log(rawResponse);
+      console.groupEnd();
+      
       const parsedResponse = this.parseAndValidateResponse(rawResponse);
       
       return parsedResponse;
@@ -42,134 +53,137 @@ export class AIStrategyService {
   }
 
   private buildPrompt(input: AIStrategyInput): string {
-    const { availablePlayers, userTeam, draftState, picksUntilMyTurn, vorpData } = input;
-    
-    // Get top 20 players by VORP for context
-    const topPlayers = availablePlayers
-      .filter(p => !p.isDrafted && !p.isDoNotDraft)
-      .map(p => {
-        const vorp = vorpData.find(v => v.playerId === p.id);
-        return { ...p, vorpValue: vorp?.vorp || 0 };
-      })
-      .sort((a, b) => b.vorpValue - a.vorpValue)
-      .slice(0, 20);
+    const { 
+      candidates,
+      userTeam, 
+      draftState, 
+      picksUntilMyTurn,
+      tierCountsRemaining,
+      opponentWindows,
+      positionAlerts,
+      playstyle,
+      scoringWeights,
+      kDefWindow 
+    } = input;
 
     // Analyze roster needs
     const rosterNeeds = this.analyzeRosterNeeds(userTeam, draftState.settings);
     
-    // Calculate position scarcity
-    const positionScarcity = this.calculatePositionScarcity(availablePlayers);
+    // Minify data for compact prompt
+    const myRosterMin = Object.entries(userTeam.roster)
+      .filter(([_, players]) => players.length > 0)
+      .map(([pos, players]) => `${pos}:${players.length}`)
+      .join(' ');
+    
+    const needsSummary = rosterNeeds.join(', ') || 'None critical';
+    
+    const structuralPrefsMin = JSON.stringify({
+      QB: 1, RB: 3, WR: 4, TE: 2, K: 1, DEF: 1 // Default structural targets
+    });
+    
+    const tierCountsMin = JSON.stringify(tierCountsRemaining);
+    
+    const positionAlertsMin = positionAlerts?.join('; ') || 'None';
+    
+    const opponentWindowsMin = opponentWindows?.map(w => 
+      `${w.team}:${w.picksBeforeMe}picks,needs:${w.needs.slice(0,2).join(',')}`
+    ).join(' | ') || 'None';
+    
+    const candidatesJsonMin = JSON.stringify(candidates.slice(0, 20)); // Top 20 only
+    
+    const minifiedRosterSlots = Object.entries(draftState.settings.rosterSlots)
+      .map(([pos, count]) => `${pos}:${count}`)
+      .join(' ');
 
-    const prompt = `Draft Analysis Request:
+    const prompt = `FANTASY DRAFT ANALYSIS
+Pick: ${draftState.currentPick} | Picks until my turn: ${picksUntilMyTurn}
+League: ${draftState.settings.scoringType || 'Standard'} | Draft: Snake | Slots: ${minifiedRosterSlots}
 
-CURRENT SITUATION:
-- Pick ${draftState.currentPick} of ${draftState.settings.numberOfTeams * draftState.settings.numberOfRounds}
-- Picks until my turn: ${picksUntilMyTurn}
-- Draft position: ${draftState.settings.draftSlot}/${draftState.settings.numberOfTeams}
+HARD CONSTRAINTS
+- Recommend EXACTLY 3 players.
+- Never suggest taken players or exceed roster limits.
+- Priority: VORP > positional need/scarcity > ADP value > stack > bye balance > risk preference.
+- If any input missing, add to "warnings" and proceed.
 
-USER ROSTER:
-${Object.entries(userTeam.roster).map(([pos, players]) => 
-  `${pos}: ${players.map(p => p.name).join(', ') || 'Empty'}`
-).join('\n')}
+MY TEAM
+- Roster: ${myRosterMin}
+- Needs: ${needsSummary}
+- Playstyle: ${playstyle} | Structural targets: ${structuralPrefsMin}
+- Existing stacks: QB-WR:0 QB-TE:0
 
-ROSTER NEEDS: ${rosterNeeds.join(', ')}
+MARKET SNAPSHOT
+- Tier counts remaining: ${tierCountsMin}
+- Position alerts: ${positionAlertsMin}
+- Opponent windows (before my next pick): ${opponentWindowsMin}
 
-TOP AVAILABLE PLAYERS (by VORP):
-${topPlayers.slice(0, 10).map(p => 
-  `${p.name} (${p.position}) - VORP: ${p.vorpValue.toFixed(1)}, ADP: ${p.adp}`
-).join('\n')}
+CANDIDATES (top ~20)
+${candidatesJsonMin}
 
-POSITION SCARCITY:
-${Object.entries(positionScarcity).map(([pos, data]) => 
-  `${pos}: ${data.available} available, ${data.quality} quality`
-).join('\n')}
+SCORING GUIDANCE (0..1 weights)
+w_vorp=${scoringWeights?.w_vorp} w_need=${scoringWeights?.w_need} w_adp=${scoringWeights?.w_adp} w_stack=${scoringWeights?.w_stack} w_bye=${scoringWeights?.w_bye} w_risk=${scoringWeights?.w_risk} w_snipe=${scoringWeights?.w_snipe}
 
-USER PREFERENCES:
-- Risk Tolerance: ${this.config.userPreferences?.riskTolerance || 'Balanced'}
-- Prioritize VORP: ${this.config.userPreferences?.prioritizeVORP || true}
-- Stacking Preference: ${this.config.userPreferences?.stackingPreference || false}
+HEURISTICS
+- urgency = High if p_available_next_pick < 0.30 OR tier_cliff_pressure(pos) >= 0.7; Medium if < 0.60 or cliff >= 0.4; else Low
+- confidence is the normalized margin between the chosen player's composite score and the best non-selected alternative (typically rank #4), truncated to [0,1]
+- adp_delta = adp - currentPick (negative = reach)
+- If any of (tier, adp, p_available_next_pick) is missing, keep recommendation but add an item to "warnings"
+- Do NOT invent data. If a field is missing, mention it in "warnings" and proceed
+- K/DEF only if picksUntilMyTurn < ${kDefWindow} AND needs satisfied
 
-CONSTRAINTS:
-- Do not recommend drafted players
-- Respect position limits
-- Explanations ≤35 words
-- Prioritize: VORP → positional need → ADP value → stacking → bye balance
+TIE-BREAKERS (apply only if composites within 2%):
+1) Roster fit vs structural targets
+2) ADP value
+3) Stack equity
+4) Bye diversity
+5) Risk aligned to playstyle
 
-Provide a JSON response with exactly this structure:
+OUTPUT JSON (STRICT):
 {
   "topRecommendations": [
     {
       "playerId": "string",
-      "playerName": "string", 
+      "playerName": "string",
       "position": "QB|RB|WR|TE|K|DEF",
+      "team": "string",
       "vorp": number,
-      "explanation": "≤35 words explaining why this pick makes sense",
+      "tier": number,
+      "adp": number,
+      "adpDelta": number,
+      "pAvailableNextPick": 0.0-1.0,
+      "urgency": "High|Medium|Low",
       "confidence": 0.0-1.0,
-      "urgency": "High|Medium|Low"
+      "explanation": "≤100 chars",
+      "scoreBreakdown": {
+        "vorp": number,
+        "need": number,
+        "adpValue": number,
+        "stack": number,
+        "bye": number,
+        "risk": number,
+        "snipe": number
+      },
+      "tieBreakersApplied": [ "RosterFit" | "ADPValue" | "StackEquity" | "ByeDiversity" | "RiskProfile" ],
+      "strategicReasoning": {
+        "rosterFit": "≤50 chars",
+        "positionalScarcity": "≤50 chars",
+        "opponentImpact": "≤50 chars",
+        "futureFlexibility": "≤50 chars",
+        "opportunityCost": 0.0-1.0
+      }
     }
   ],
-  "whatIfForesight": {
-    "nextPickProbabilities": [
-      {
-        "playerId": "string",
-        "playerName": "string",
-        "position": "QB|RB|WR|TE|K|DEF", 
-        "availabilityProbability": 0.0-1.0,
-        "explanation": "≤35 words"
-      }
-    ],
-    "recommendedStrategy": "Wait|Draft_Now|Consider_Alternatives",
-    "strategyExplanation": "≤35 words"
+  "whatIfPass": {
+    "likelyAvailableNextPick": [ "playerId", "playerId" ],
+    "risks": [ "string" ],
+    "notes": "≤120 chars"
   },
-  "rosterBalance": {
-    "positionNeeds": [
-      {
-        "position": "QB|RB|WR|TE|K|DEF",
-        "urgency": "Critical|High|Medium|Low", 
-        "explanation": "≤35 words"
-      }
-    ],
-    "tierAlerts": [
-      {
-        "position": "QB|RB|WR|TE|K|DEF",
-        "tier": number,
-        "playersRemaining": number,
-        "isCliff": boolean,
-        "explanation": "≤35 words"
-      }
-    ],
-    "byeWeekConcerns": [
-      {
-        "week": number,
-        "affectedPositions": ["QB|RB|WR|TE|K|DEF"],
-        "severity": "High|Medium|Low"
-      }
-    ]
-  },
-  "targetAlerts": {
-    "lastChanceTargets": [
-      {
-        "playerId": "string", 
-        "playerName": "string",
-        "position": "QB|RB|WR|TE|K|DEF",
-        "roundsLeft": number,
-        "explanation": "≤35 words",
-        "priority": "Must_Draft|High|Medium"
-      }
-    ],
-    "stackingOpportunities": [
-      {
-        "primaryPlayerId": "string",
-        "stackPlayerId": "string", 
-        "stackType": "QB_WR|QB_TE|RB_DEF",
-        "explanation": "≤35 words",
-        "value": 0.0-1.0
-      }
-    ]
-  },
+  "warnings": [ "string" ],
   "timestamp": ${Date.now()},
-  "confidence": 0.0-1.0
-}`;
+  "confidence": 0.0-1.0,
+  "summary": "≤150 chars"
+}
+
+Return STRICT JSON only. No backticks, no markdown, no commentary.`;
 
     return prompt;
   }
@@ -210,15 +224,38 @@ Provide a JSON response with exactly this structure:
 
   private parseAndValidateResponse(rawResponse: string): AIStrategyResponse {
     try {
-      // Extract JSON from response (handle markdown code blocks)
-      const jsonMatch = rawResponse.match(/```json\n([\s\S]*?)\n```/) || 
-                       rawResponse.match(/```\n([\s\S]*?)\n```/) ||
-                       [null, rawResponse];
+      // Parse pure JSON (no code fence stripping needed with strict JSON mode)
+      const parsed = JSON.parse(rawResponse.trim());
       
-      const jsonStr = jsonMatch[1] || rawResponse;
-      const parsed = JSON.parse(jsonStr.trim());
+      // Validate with Zod schema
+      const validated = AIStrategyResponseSchema.parse(parsed);
       
-      return AIStrategyResponseSchema.parse(parsed);
+      // Normalize urgency using explicit heuristics if model deviates
+      validated.topRecommendations.forEach(rec => {
+        if (rec.pAvailableNextPick !== undefined) {
+          const tierCliffPressure = 0.5; // Default - could calculate from input if available
+          
+          // Apply explicit urgency thresholds as defined in requirements
+          if (rec.pAvailableNextPick < 0.30 || tierCliffPressure >= 0.7) {
+            if (rec.urgency !== 'High') {
+              console.warn(`Correcting urgency to High for ${rec.playerName} (p_available=${rec.pAvailableNextPick})`);
+              rec.urgency = 'High';
+            }
+          } else if (rec.pAvailableNextPick < 0.60 || tierCliffPressure >= 0.4) {
+            if (rec.urgency !== 'Medium' && rec.urgency !== 'High') {
+              console.warn(`Correcting urgency to Medium for ${rec.playerName} (p_available=${rec.pAvailableNextPick})`);
+              rec.urgency = 'Medium';
+            }
+          } else {
+            if (rec.urgency !== 'Low' && rec.urgency !== 'Medium' && rec.urgency !== 'High') {
+              console.warn(`Correcting urgency to Low for ${rec.playerName} (p_available=${rec.pAvailableNextPick})`);
+              rec.urgency = 'Low';
+            }
+          }
+        }
+      });
+      
+      return validated;
     } catch (error) {
       console.error('Failed to parse AI response:', error);
       console.error('Raw response:', rawResponse);

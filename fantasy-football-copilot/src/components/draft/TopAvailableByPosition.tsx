@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { Star, Target } from 'lucide-react';
 import { useDraft } from '../../contexts/DraftContext';
+import { ProbabilityDisplay } from '../common/ProbabilityDisplay';
 import type { Position, Player } from '../../types';
 
 const TopAvailableByPosition: React.FC = () => {
@@ -107,6 +108,13 @@ const TopAvailableByPosition: React.FC = () => {
                         )}
                         <div className="text-xs text-gray-500">
                           ADP: {player.adp.toFixed(1)}
+                        </div>
+                        <div className="mt-1">
+                          <ProbabilityDisplay 
+                            player={player} 
+                            draftState={state} 
+                            size="small"
+                          />
                         </div>
                       </div>
                       
