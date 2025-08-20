@@ -9,6 +9,7 @@ import PlayerImport from './players/PlayerImport';
 import GlobalVORPSettings from './settings/GlobalVORPSettings';
 import { DraftHistory } from './draft/DraftHistory';
 import TeamRosterGrid from './draft/TeamRosterGrid';
+import EnhancedDecisionDashboard from './draft/EnhancedDecisionDashboard';
 
 type SetupStep = 'settings' | 'vorp-settings' | 'import' | 'draft';
 
@@ -80,25 +81,9 @@ const AppContent = () => {
         
         
         {currentStep === 'draft' && (
-          <div className="space-y-4">
-            {/* Top 3 VORP Players Overall */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <h3 className="text-lg font-bold text-gray-900 mb-3">Top 3 VORP Available</h3>
-              <div className="grid grid-cols-3 gap-4">
-                {state.players
-                  .filter(p => !p.isDrafted && !p.isDoNotDraft)
-                  .sort((a, b) => (b.vorp || 0) - (a.vorp || 0))
-                  .slice(0, 3)
-                  .map((player, index) => (
-                    <div key={player.id} className="text-center p-3 border rounded-lg bg-gradient-to-br from-green-50 to-blue-50">
-                      <div className="text-2xl font-bold text-green-600">#{index + 1}</div>
-                      <div className="font-semibold text-gray-900">{player.name}</div>
-                      <div className="text-sm text-gray-600">{player.position} - {player.team}</div>
-                      <div className="text-xl font-bold text-blue-600">VORP: {(player.vorp || 0).toFixed(1)}</div>
-                    </div>
-                  ))}
-              </div>
-            </div>
+          <div className="space-y-6">
+            {/* Enhanced Decision Dashboard */}
+            <EnhancedDecisionDashboard />
 
             {/* Draft Pick Ledger */}
             <div className="bg-white rounded-lg shadow p-4">
@@ -599,6 +584,7 @@ const AppContent = () => {
           </div>
         </div>
       )}
+
     </div>
   );
 };

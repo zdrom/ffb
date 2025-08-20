@@ -8,19 +8,26 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
     "server": "cd server && npm install && npm start",
     "server:dev": "cd server && npm install && npm run dev",
     "start": "concurrently \"npm run server:dev\" \"npm run dev\"",
     "build:all": "npm run build && cd server && npm install"
   },
   "dependencies": {
+    "@vitest/ui": "^3.2.4",
+    "jsdom": "^26.1.0",
     "lucide-react": "^0.539.0",
     "papaparse": "^5.5.3",
     "react": "^19.1.1",
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1",
     "react-dom": "^19.1.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "vitest": "^3.2.4",
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

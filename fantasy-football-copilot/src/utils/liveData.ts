@@ -1,6 +1,7 @@
 // Live fantasy football data from free APIs
 import type { Player, CustomScoring } from '../types';
 import { recalculatePlayerRankings } from './customScoring';
+import { enhancePlayersWithByeWeeks } from './byeWeekService';
 
 // Sleeper API - completely free, no API key required
 const SLEEPER_BASE_URL = 'https://api.sleeper.app/v1';
@@ -204,7 +205,10 @@ export async function loadFantasyProsADP(): Promise<Player[]> {
     
     console.log(`Top 10 players: ${sortedPlayers.slice(0, 10).map(p => `${p.rank}. ${p.name} (${p.position}${p.positionRank}) - ADP: ${p.adp}`).join(', ')}`);
     
-    return sortedPlayers;
+    // Enhance with bye week data from CSV
+    const playersWithByeWeeks = await enhancePlayersWithByeWeeks(sortedPlayers);
+    
+    return playersWithByeWeeks;
     
   } catch (error) {
     console.error('Failed to load FantasyPros ADP:', error);
@@ -354,7 +358,10 @@ export async function enhancePlayersWithLiveData(existingPlayers: Player[]): Pro
       }
     }
     
-    return enhanced;
+    // Also enhance with bye week data
+    const enhancedWithByeWeeks = await enhancePlayersWithByeWeeks(enhanced);
+    
+    return enhancedWithByeWeeks;
     
   } catch (error) {
     console.error('Failed to enhance players with live data:', error);
